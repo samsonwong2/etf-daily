@@ -24,18 +24,18 @@
 # 盘中完整链路（含 ④ OPS）:
 #   INTRADAY=1 RUN_OPS_SCAN=1 OUT_STAMP=103630 AS_OF=2026-07-28 PY=... ./scripts/daily_regime_transition_validation.sh
 # 已有盘中包，只补跑 ④:
-#   $PY decision_pack/scripts/scan_triangle_decision_ops.py \\
-#     --pack-dir workspace/decision_packs/intraday/20260728/103630 --intraday --continue-on-error
+#   $PY src/etf_daily/regime/scan_triangle_decision_ops.py \\
+#     --pack-dir runtime/decision_packs/intraday/20260728/103630 --intraday --continue-on-error
 #
 # AS_OF: 信号截止日（含）。未设置时默认用系统今天。所有日期相关路径/参数均由此推导。
-# INTRADAY=1: 抓取冻结快照并写入 workspace/decision_packs/intraday/YYYYMMDD/<OUT_STAMP|HHMMSS>/
+# INTRADAY=1: 抓取冻结快照并写入 runtime/decision_packs/intraday/YYYYMMDD/<OUT_STAMP|HHMMSS>/
 set -euo pipefail
 
 # ── 路径配置（按需修改）──────────────────────────────────────
 # shellcheck disable=SC1091
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/daily_env.sh"
-FORMAL_OUT_DIR="${PROJECT_ROOT}/workspace/decision_packs/20260720/regime_transition_validation_q90_to0720"
-CACHE_DIR="${PROJECT_ROOT}/workspace/decision_packs/regime_transition_model_cache"
+FORMAL_OUT_DIR="${PROJECT_ROOT}/runtime/decision_packs/20260720/regime_transition_validation_q90_to0720"
+CACHE_DIR="${PROJECT_ROOT}/runtime/decision_packs/regime_transition_model_cache"
 INTRADAY="${INTRADAY:-0}"
 PLOT_START="${PLOT_START:-2026-04-01}"
 SKIP_REBUILD="${SKIP_REBUILD:-0}"
@@ -65,7 +65,7 @@ HTML_OUT_DIR="${HTML_POOL_DIR:-${PLOTLY_ROOT}/${AS_OF_TAG}all}"
 
 if [[ "${INTRADAY}" == "1" ]]; then
   STAMP="${OUT_STAMP:-$(date +%H%M%S)}"
-  OUT_DIR="${PROJECT_ROOT}/workspace/decision_packs/intraday/${AS_OF_TAG}/${STAMP}"
+  OUT_DIR="${PROJECT_ROOT}/runtime/decision_packs/intraday/${AS_OF_TAG}/${STAMP}"
   HTML_OUT_DIR="${OUT_DIR}/html"
   LIVE_SNAPSHOT="${OUT_DIR}/live_snapshot.csv"
   mkdir -p "${OUT_DIR}/shards" "${HTML_OUT_DIR}"
@@ -98,7 +98,7 @@ if [[ "${INTRADAY}" == "1" ]]; then
 
   # Capture frozen snapshot BEFORE any shard recomputation.
   echo "[INFO] capturing AkShare live snapshot -> ${LIVE_SNAPSHOT}"
-  "${PY}" -m decision_pack.src.regime_transition_live_snapshot \
+  "${PY}" -m etf_daily.lib.regime_transition_live_snapshot \
     --as-of "${AS_OF}" \
     --output "${LIVE_SNAPSHOT}"
 
@@ -124,7 +124,7 @@ fi
 # ── ① 增量跑验证（resume 默认开启，历史月份跳过）────────────
 echo ""
 echo "=== ① regime transition validation ==="
-"${PY}" decision_pack/scripts/backtest_regime_transition_signals.py \
+"${PY}" src/etf_daily/regime/backtest_regime_transition_signals.py \
   --output-dir "${OUT_DIR}" \
   --cache-dir "${CACHE_DIR}" \
   --eval-start 2024-06-01 \
@@ -137,7 +137,7 @@ run_rebuild_and_plot() {
   if [[ "${SKIP_REBUILD}" != "1" ]]; then
     echo ""
     echo "=== ② rebuild reversal labels + event match ==="
-    "${PY}" decision_pack/scripts/rebuild_reversal_event_metrics.py \
+    "${PY}" src/etf_daily/regime/rebuild_reversal_event_metrics.py \
       --validation-dir "${OUT_DIR}" \
       "${LIVE_ARGS[@]+"${LIVE_ARGS[@]}"}"
   else
@@ -148,7 +148,7 @@ run_rebuild_and_plot() {
     echo ""
     echo "=== ③ plot pool HTML ==="
     mkdir -p "${HTML_OUT_DIR}"
-    "${PY}" decision_pack/scripts/plot_regime_transition_example.py \
+    "${PY}" src/etf_daily/plots/plot_regime_transition_example.py \
       --validation-dir "${OUT_DIR}" \
       --start-date "${PLOT_START}" \
       --end-date "${AS_OF}" \
@@ -166,7 +166,7 @@ if [[ "${INTRADAY}" == "1" ]]; then
   if [[ "${RUN_OPS_SCAN}" == "1" ]]; then
     echo ""
     echo "=== ④ triangle decision ops scan (intraday) ==="
-    "${PY}" decision_pack/scripts/scan_triangle_decision_ops.py \
+    "${PY}" src/etf_daily/regime/scan_triangle_decision_ops.py \
       --pack-dir "${OUT_DIR}" \
       --as-of "${AS_OF}" \
       --intraday \
@@ -178,7 +178,7 @@ else
   if [[ "${RUN_OPS_SCAN}" == "1" ]]; then
     echo ""
     echo "=== ④ triangle decision ops scan (guide next session) ==="
-    "${PY}" decision_pack/scripts/scan_triangle_decision_ops.py \
+    "${PY}" src/etf_daily/regime/scan_triangle_decision_ops.py \
       --html-dir "${HTML_OUT_DIR}" \
       --validation-dir "${OUT_DIR}" \
       --as-of "${AS_OF}" \

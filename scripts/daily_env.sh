@@ -12,6 +12,12 @@ fi
 PLOTLY_ROOT="${PLOTLY_ROOT:-${HOME}/etf-daily-output/plotly_outputs}"
 HRP_OUTPUT_DIR="${HRP_OUTPUT_DIR:-${HOME}/etf-daily-output/decision_packs}"
 PY="${PY:-python3}"
+_SRC="${PROJECT_ROOT}/src"
+case ":${PYTHONPATH:-}:" in
+  *":${_SRC}:"*) ;;
+  *) PYTHONPATH="${_SRC}${PYTHONPATH:+:${PYTHONPATH}}" ;;
+esac
+export PYTHONPATH
 if [[ -z "${HRP_MEMBERSHIP_CSV:-}" ]]; then
   unset HRP_MEMBERSHIP_CSV || true
 fi

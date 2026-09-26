@@ -61,7 +61,7 @@ echo "accept 2/8 pool"
 "$PY" run.py pool
 
 echo "accept 3/8 cluster review"
-"$PY" fund_pool_builder/每日审查cluster_mapping_最短命令清单.py \
+"$PY" src/etf_daily/pool/每日审查cluster_mapping_最短命令清单.py \
   --future-end "${AS_OF}" \
   --selected-csv "${TEMP_DIR}/cluster_mapping_selected.csv" \
   --mapping-csv "${TEMP_DIR}/cluster_mapping.csv"
@@ -79,14 +79,14 @@ AS_OF="${AS_OF}" JOBS=8 PY="${PY}" \
   ./scripts/daily_adaptive_from_listing.sh
 
 echo "accept 7/8 hrp"
-"$PY" workspace/scripts/generate_hrp_dendrogram_html.py \
+"$PY" src/etf_daily/hrp/dendrogram.py \
   --lookback-days 252 \
   --asof-date "${AS_OF}" \
   --dist-t 0.8 \
   --output "${HRP_OUTPUT_DIR}/${AS_OF_TAG}/hrp_dendrogram_${AS_OF_TAG}_d080.html"
 
 echo "accept 8/8 next-day triggers"
-PYTHONPATH=. "$PY" decision_pack/scripts/scan_next_day_trigger_prices.py \
+PYTHONPATH="${PROJECT_ROOT}/src" "$PY" src/etf_daily/triggers/scan.py \
   --listing-dir "${PLOTLY_ROOT}/${AS_OF_TAG}_from_listing" \
   --as-of "${AS_OF}" \
   --next-day "${NEXT_DAY}" \

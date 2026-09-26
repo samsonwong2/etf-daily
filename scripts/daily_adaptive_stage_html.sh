@@ -23,7 +23,7 @@ set -euo pipefail
 
 # shellcheck disable=SC1091
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/daily_env.sh"
-VALIDATION_DIR="${VALIDATION_DIR:-${PROJECT_ROOT}/workspace/decision_packs/20260720/regime_transition_validation_q90_to0720}"
+VALIDATION_DIR="${VALIDATION_DIR:-${PROJECT_ROOT}/runtime/decision_packs/20260720/regime_transition_validation_q90_to0720}"
 PLOT_START="${PLOT_START:-2026-04-01}"
 TRAIN_CUTOFF="${TRAIN_CUTOFF:-${PLOT_START}}"
 LIVE_SNAPSHOT="${LIVE_SNAPSHOT:-}"
@@ -59,7 +59,7 @@ HTML_OUT_DIR="${HTML_OUT_DIR:-${PLOTLY_ROOT}/${AS_OF_TAG}all_adaptive}"
 cd "${PROJECT_ROOT}"
 
 ARGS=(
-  decision_pack/scripts/plot_adaptive_stage_pool.py
+  src/etf_daily/plots/plot_adaptive_stage_pool.py
   --start-date "${PLOT_START}"
   --end-date "${AS_OF}"
   --train-cutoff "${TRAIN_CUTOFF}"
@@ -110,7 +110,7 @@ echo "[INFO] HTML_OUT_DIR=${HTML_OUT_DIR}"
 echo "[OK] 输出目录: ${HTML_OUT_DIR}"
 if [[ "${TICKET_CARD:-1}" != "0" ]]; then
   echo "[INFO] building research ticket_card.csv (TICKET_CARD=0 to skip)"
-  "${PY}" decision_pack/scripts/build_daily_ticket_card.py \
+  "${PY}" src/etf_daily/plots/build_daily_ticket_card.py \
     --as-of "${AS_OF}" \
     --adaptive-dir "${HTML_OUT_DIR}" \
     --out "${HTML_OUT_DIR}/ticket_card.csv"

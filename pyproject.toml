@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "etf-daily"
+version = "0.1.0"
+description = "Daily ETF pool, regime, and adaptive HTML commands"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+dependencies = [
+  "pandas",
+  "numpy",
+  "plotly",
+  "scipy",
+  "skfolio",
+]
+
+[project.scripts]
+etf-daily = "etf_daily.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

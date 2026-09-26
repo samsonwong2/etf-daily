@@ -28,7 +28,7 @@ set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/daily_env.sh"
 AS_OF="${AS_OF:-$(date +%Y-%m-%d)}"
 TRAIN_CUTOFF="${TRAIN_CUTOFF:-2026-04-01}"
-VALIDATION_DIR="${VALIDATION_DIR:-${PROJECT_ROOT}/workspace/decision_packs/20260720/regime_transition_validation_q90_to0720}"
+VALIDATION_DIR="${VALIDATION_DIR:-${PROJECT_ROOT}/runtime/decision_packs/20260720/regime_transition_validation_q90_to0720}"
 CONFIG_SOURCE_DIR="${CONFIG_SOURCE_DIR:-}"
 HTML_OUT_DIR="${HTML_OUT_DIR:-}"
 CODES="${CODES:-}"
@@ -111,7 +111,7 @@ fi
 cd "${PROJECT_ROOT}"
 
 ARGS=(
-  decision_pack/scripts/plot_adaptive_from_listing.py
+  src/etf_daily/plots/plot_adaptive_from_listing.py
   --as-of "${AS_OF}"
   --train-cutoff "${TRAIN_CUTOFF}"
   --validation-dir "${VALIDATION_DIR}"
@@ -161,12 +161,12 @@ echo "[INFO] INCREMENTAL_MODE=${INCREMENTAL_MODE} PREV_LISTING_DIR=${PREV_LISTIN
 echo "[INFO] TRAIN_CACHE_DIR=${TRAIN_CACHE_DIR}"
 echo "[INFO] LISTING_CACHE=${LISTING_CACHE}"
 echo "[INFO] FIG12=${FIG12}"
-PYTHONPATH=. "${PY}" "${ARGS[@]}"
+PYTHONPATH="${PROJECT_ROOT}/src" "${PY}" "${ARGS[@]}"
 
 _fig12="$(echo "${FIG12}" | tr '[:upper:]' '[:lower:]')"
 if [[ "${_fig12}" != "0" && "${_fig12}" != "false" && "${_fig12}" != "off" && "${_fig12}" != "no" ]]; then
   FIG12_ARGS=(
-    decision_pack/scripts/add_fig12_six_states.py
+    src/etf_daily/plots/add_fig12_six_states.py
     --html-dir "${HTML_OUT_DIR}"
     --jobs "${JOBS}"
   )
@@ -176,6 +176,6 @@ if [[ "${_fig12}" != "0" && "${_fig12}" != "false" && "${_fig12}" != "off" && "$
     done
   fi
   echo "[INFO] fig12 post-process html-dir=${HTML_OUT_DIR} jobs=${JOBS}"
-  PYTHONPATH=. "${PY}" "${FIG12_ARGS[@]}"
+  PYTHONPATH="${PROJECT_ROOT}/src" "${PY}" "${FIG12_ARGS[@]}"
 fi
 echo "[OK] 输出目录: ${HTML_OUT_DIR}"

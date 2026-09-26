@@ -6,7 +6,7 @@ set -euo pipefail
 _HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${_HERE}/.." && pwd)"
 OLD_ROOT="${1:-${OLD_DECISION_PACK_ROOT:-}}"
-LINK_DEST="${LINK_DEST:-${PROJECT_ROOT}/workspace/decision_packs}"
+LINK_DEST="${LINK_DEST:-${PROJECT_ROOT}/runtime/decision_packs}"
 NAMES=(20260720 regime_transition_model_cache)
 
 if [[ -z "${OLD_ROOT}" ]]; then

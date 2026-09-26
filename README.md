@@ -1,69 +1,89 @@
 # etf-daily
 
-日终八条命令。需要本机已有的 qlib 基金数据。Python 3.12。
+Daily ETF commands: data refresh, candidate pool, cluster review, regime validation, adaptive HTML, from-listing HTML, HRP dendrogram, and next-day triggers.
+
+Qlib fund data is required and is not downloaded by `pip`. If `pip install` cannot find a package named `qlib`, install Qlib the way this machine already has it, then install this checkout.
+
+## Install
 
 ```bash
-pip install qlib pandas numpy plotly scipy skfolio
+pip install -e .
 cp config.env.example config.env
 cp configs/production_regime_switch_ewma_shrink.json.example configs/production_regime_switch_ewma_shrink.json
 ```
 
-改两份副本。`config.env` 的 `PY` 指向解释器，`PLOTLY_ROOT` 指向 HTML 目录，`TEMP_DIR` 与 json 里的 `paths.temp_dir` 相同。json 的 `paths.provider_uri` 指向 qlib 基金数据，`paths.qlib_scripts_dir` 指向 qlib 的 `scripts`（`run.py etl` 需要它）。公开缺省是 `~/.qlib/qlib_data/all_fund_data` 和 `~/etf-daily-output`。
+Edit the two copies. `config.env` needs `PY` and `PLOTLY_ROOT`. The json holds data paths, including `paths.qlib_scripts_dir` for `etl`. A missing file exits and names the example.
 
-续跑分片用链接，不提交：
-
-```bash
-OLD_DECISION_PACK_ROOT=/path/to/decision_packs ./scripts/link_decision_packs.sh
-```
-
-脚本只链接 `20260720` 和 `regime_transition_model_cache`。
-
-## 日终
-
-在仓库根目录。四支 shell 自己读取 `config.env`。下面前三条直接调用 `$PY`，先导出同一份配置：
+Point two symlinks at your regime shard directory and model cache. Do not copy those CSVs into git:
 
 ```bash
-set -a
-source config.env
-set +a
-AS_OF=YYYY-MM-DD
-NEXT_DAY=YYYY-MM-DD
-AS_OF_TAG=YYYYMMDD
+mkdir -p runtime/decision_packs
+ln -sfn /path/to/20260720 runtime/decision_packs/20260720
+ln -sfn /path/to/regime_transition_model_cache runtime/decision_packs/regime_transition_model_cache
 ```
+
+## Daily order
+
+Run these in order. `adaptive` reads the validation directory written by `regime`. `listing` reads that day's `all_adaptive` directory written by `adaptive`. If that directory is missing, `listing` exits and prints the path. It does not run `adaptive` for you.
+
+Only `listing` writes the HTML under `$PLOTLY_ROOT/20260924_from_listing`. The date comes from `--as-of 2026-09-24`. The other commands write fund data, a candidate pool, cluster tables, a regime signal shard, a different HTML directory, an HRP page, or a trigger table.
 
 ```bash
-"$PY" run.py etl
-"$PY" run.py pool
-"$PY" fund_pool_builder/每日审查cluster_mapping_最短命令清单.py \
-  --future-end "$AS_OF" \
-  --selected-csv "$TEMP_DIR/cluster_mapping_selected.csv" \
-  --mapping-csv "$TEMP_DIR/cluster_mapping.csv"
-AS_OF=$AS_OF JOBS=8 PY=$PY SKIP_REBUILD=1 SKIP_HTML=1 \
-  ./scripts/daily_regime_transition_validation.sh
-AS_OF=$AS_OF JOBS=8 PY=$PY \
-  ./scripts/daily_adaptive_stage_html.sh
-AS_OF=$AS_OF JOBS=8 PY=$PY \
-  ./scripts/daily_adaptive_from_listing.sh
-"$PY" workspace/scripts/generate_hrp_dendrogram_html.py \
-  --lookback-days 252 \
-  --asof-date "$AS_OF" \
-  --dist-t 0.8 \
-  --output "$HRP_OUTPUT_DIR/$AS_OF_TAG/hrp_dendrogram_${AS_OF_TAG}_d080.html"
-PYTHONPATH=. "$PY" decision_pack/scripts/scan_next_day_trigger_prices.py \
-  --listing-dir "$PLOTLY_ROOT/${AS_OF_TAG}_from_listing" \
-  --as-of "$AS_OF" \
-  --next-day "$NEXT_DAY" \
-  --jobs 8
+etf-daily etl
+etf-daily pool
+etf-daily cluster-review
+etf-daily regime --skip-rebuild --skip-html
+etf-daily adaptive --as-of 2026-09-24
+etf-daily listing --as-of 2026-09-24
+etf-daily hrp --as-of 2026-09-24
+etf-daily hrp --dist-t 0.8 --as-of 2026-09-24
+etf-daily triggers --listing-dir "$PLOTLY_ROOT/20260924_from_listing"
 ```
 
-`from_listing` 默认增量，不要加 `INCREMENTAL=0`。`HRP_MEMBERSHIP_CSV` 为空时，adaptive 脚本不传 `--hrp-membership-csv`。
+`listing` is incremental unless the shell is run with `INCREMENTAL=0`. Figure 12 runs unless `FIG12=0`.
 
-同一八条也可以交给验收脚本。两个日期都必填：
+### `etf-daily etl`
+
+Refreshes the fund list and qlib binary data. This needs network and `paths.qlib_scripts_dir` in the local json. This does not draw HTML.
+
+### `etf-daily pool`
+
+Builds the candidate pool directly. There is no CSI800/CSI1000 merge. It writes `cluster_mapping.csv`, `cluster_mapping_selected.csv`, and `cluster_mapping_selected.txt` under the local json `temp_dir`, not under `PLOTLY_ROOT`.
+
+### `etf-daily cluster-review`
+
+Audits `cluster_mapping_selected.csv` against the full `cluster_mapping.csv` from the same select run. `--future-end` defaults to today. This writes a review. It does not refresh the listing HTML.
+
+### `etf-daily regime --skip-rebuild --skip-html`
+
+Updates the regime-transition signal shard for the month of `--as-of`. With no `--as-of`, that date is today, not `2026-09-24`. `--skip-rebuild` skips the reversal-metric rebuild. `--skip-html` skips the regime HTML, so nothing is written to `$PLOTLY_ROOT/{YYYYMMDD}all`. The shard lives under `runtime/decision_packs/20260720`. `adaptive` and `listing` both read it.
+
+### `etf-daily adaptive --as-of 2026-09-24`
+
+Draws the adaptive-stage HTML for the cluster-selected names, ending 2026-09-24. HTML goes to `$PLOTLY_ROOT/20260924all_adaptive`. Training reuses `$PLOTLY_ROOT/_train_cache`. A ticket card is written into the same directory. This directory is the config source for `listing`. It is not the from-listing HTML folder.
+
+### `etf-daily listing --as-of 2026-09-24`
+
+Draws one HTML per name from listing date through 2026-09-24. It first requires `$PLOTLY_ROOT/20260924all_adaptive`. If that directory is missing, it exits and prints the path. HTML goes to `$PLOTLY_ROOT/20260924_from_listing`. Incremental mode appends each missing session after the newest older `*_from_listing` directory under `PLOTLY_ROOT`. Figure 12 is added unless `FIG12=0`.
+
+### `etf-daily hrp`
+
+Builds the HRP dendrogram for the cluster pool. Lookback is 252 days. Distance stays at the production default. With no `--asof-date`, the end date is today. The page is `$HRP_OUTPUT_DIR/{YYYYMMDD}/hrp_dendrogram_{YYYYMMDD}.html`. Pass `--asof-date 2026-09-24` when the page should match that listing day.
+
+### `etf-daily hrp --dist-t 0.8`
+
+Same dendrogram with a coarser distance cut of `0.8`. The page is `$HRP_OUTPUT_DIR/{YYYYMMDD}/hrp_dendrogram_{YYYYMMDD}_d080.html`, so it does not replace the default page.
+
+### `etf-daily triggers --listing-dir "$PLOTLY_ROOT/YYYYMMDD_from_listing"`
+
+Scans the from-listing HTML and writes next-session trigger prices back into that same directory. `YYYYMMDD` in the line above is a placeholder. For the 2026-09-24 batch, replace it with `20260924`. When `--as-of` and `--next-day` are omitted, the date in the directory name is T, and T+1 is the next weekday. This skip does not know exchange holidays. Pass `--next-day` yourself when the next session is not the next weekday.
+
+## Tests
 
 ```bash
-./scripts/accept_eod.sh --as-of YYYY-MM-DD --next-day YYYY-MM-DD
+pip install -e .
+python -m pytest tests/test_public_tree.py
+bash tests/test_daily_env.sh
 ```
 
-缺 `config.env` 或缺本地 json 时，脚本退出并打印上面两条 `cp`，不会启动 Python。退出码为 0 之前，不要把这个目录当成日终入口。
-
-盘中三条和池更新整月重跑不在这八条里。
+These checks do not call qlib and do not run the daily commands.

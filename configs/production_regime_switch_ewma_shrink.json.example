@@ -4,7 +4,7 @@
     "provider_uri": "~/.qlib/qlib_data/all_fund_data",
     "qlib_scripts_dir": "",
     "temp_dir": "~/etf-daily-output",
-    "workspace_dir": "{project_root}/workspace",
+    "workspace_dir": "{project_root}/runtime",
     "log_dir": "{workspace_dir}/logs",
     "plotly_outputs_dir": "~/etf-daily-output/plotly_outputs",
     "local_library_dir": "",

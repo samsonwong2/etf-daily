@@ -112,11 +112,11 @@ elif [[ "${SKIP_SNAPSHOT}" == "1" || "${SKIP_SNAPSHOT}" == "true" ]]; then
   exit 4
 else
   STAMP="$(date +%H%M%S)"
-  SNAP_DIR="${PROJECT_ROOT}/workspace/decision_packs/intraday/${AS_OF_TAG}/${STAMP}"
+  SNAP_DIR="${PROJECT_ROOT}/runtime/decision_packs/intraday/${AS_OF_TAG}/${STAMP}"
   mkdir -p "${SNAP_DIR}"
   LIVE_SNAPSHOT="${SNAP_DIR}/live_snapshot.csv"
   SNAP_ARGS=(
-    -m decision_pack.src.regime_transition_live_snapshot
+    -m etf_daily.lib.regime_transition_live_snapshot
     --as-of "${AS_OF}"
     --output "${LIVE_SNAPSHOT}"
   )

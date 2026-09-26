@@ -1,11 +1,12 @@
 """Machine checks for the public tree. These do not call qlib or the eight commands."""
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 NEEDLE_A = "/home/" + "huangtuo"
 NEEDLE_B = "/home/" + "pu"
 
@@ -26,9 +27,9 @@ def test_git_grep_prefixes_empty() -> None:
 
 
 def test_decision_packs_ignored_and_untracked() -> None:
-    ignored = _git("check-ignore", "-q", "workspace/decision_packs/20260720")
+    ignored = _git("check-ignore", "-q", "runtime/decision_packs/20260720")
     assert ignored.returncode == 0
-    listed = _git("ls-files", "--", "workspace/decision_packs")
+    listed = _git("ls-files", "--", "runtime/decision_packs")
     assert listed.returncode == 0
     assert listed.stdout.strip() == ""
 
@@ -47,8 +48,8 @@ def test_shells_source_daily_env() -> None:
 
 
 def test_optional_paths_and_public_defaults() -> None:
-    sys.path.insert(0, str(ROOT))
-    import runtime_paths
+    sys.path.insert(0, str(ROOT / "src"))
+    import etf_daily.paths as runtime_paths
 
     assert runtime_paths._optional_path("") is None
     assert runtime_paths._optional_path(None) is None
@@ -73,11 +74,12 @@ def test_missing_config_file_uses_none(tmp_path: Path) -> None:
             [
                 sys.executable,
                 "-c",
-                "import runtime_paths; "
+                "import etf_daily.paths as runtime_paths; "
                 "assert runtime_paths.QLIB_SCRIPTS_DIR is None; "
                 "assert runtime_paths.LOCAL_LIBRARY_DIR is None",
             ],
             cwd=ROOT,
+            env={**os.environ, "PYTHONPATH": str(ROOT / "src")},
             check=False,
             capture_output=True,
             text=True,
