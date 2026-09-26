@@ -1,0 +1,6 @@
+{
+  "provider_uri": "{provider_uri}",
+  "market": "all",
+  "test_period": ["2020-01-01", "2026-08-31"],
+  "fund_list_csv": "{fund_list_csv}"
+}

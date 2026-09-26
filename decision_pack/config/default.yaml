@@ -1,0 +1,313 @@
+# decision_pack 默认规则 — 与 temp/大跌日操作顺序-修订版8步详解.md 对齐
+
+orders:
+  mode: display_only  # display_only | proportional_legacy | ma_then_cap (future)
+
+defensive_codes:
+  - SH511260
+  - SH511010
+
+trend_board:
+  heavy_weight: 0.10
+  high_vol_pct: 0.80
+  vol_level_low_max: 0.33
+  vol_level_mid_max: 0.80
+  deep_below_ma20_pct: -5.0
+  weak_rs_20d: -0.05
+  stale_below_ma20_days: 3
+  red_dd_20d_high: -0.05
+  red_pnl_pct: -7.0
+  vol_accel_ratio: 1.2
+
+early_warning:
+  yellow_min_signals: 2
+  yellow_min_executed_tier: 2
+  red_pnl_pct: -7.0
+  red_dd_20d_high: -0.05
+  yellow_dd_20d_high: -0.02
+  vol_accel_ratio: 1.2
+  suggest_reduce:
+    yellow: 0.30
+    red_soft: 0.30
+    red: 0.50
+    red_critical: 1.00
+
+benchmark:
+  code: SH510300
+  ma_window: 20
+  vol_window: 20
+  vol_lookback: 120
+  vol_percentile_threshold: 0.80
+
+portfolio:
+  dd_lookback_days: 20
+
+# 阶梯表：满足任一条件取最高档；target=null 表示保持当前暴露
+tiers:
+  - tier: 0
+    label: hold
+    target_equity_exposure: null
+  - tier: 1
+    label: caution
+    target_equity_exposure: 0.80
+    triggers:
+      r_bench_lte: -0.015
+      dd_port_gte: 0.03
+  - tier: 2
+    label: reduce
+    target_equity_exposure: 0.60
+    triggers:
+      r_bench_lte: -0.025
+      bench_3d_lte: -0.04
+      dd_port_gte: 0.05
+  - tier: 3
+    label: defensive
+    target_equity_exposure: 0.40
+    triggers:
+      dd_port_gte: 0.08
+      below_ma20_and_bench_5d_lte: -0.05
+  - tier: 4
+    label: circuit_breaker
+    target_equity_exposure: 0.27
+    triggers:
+      dd_port_gte: 0.12
+
+regime:
+  structural_min_rules: 2
+  rules:
+    close_below_ma20: true
+    bench_5d_lte: -0.03
+    vol_percentile_gte: 0.80
+  sentiment_downgrade:
+    enabled: true
+    # 仅当 table_tier >= 此值时，情绪急跌才降一档执行（表 2→执行 1；表 1 仍执行 1）
+    min_table_tier: 2
+    # 熔断等最高档不因情绪降级（表 4 仍执行 4）
+    exempt_tiers: [4]
+
+recovery:
+  days_without_tier_ge_2: 10
+  require_close_above_ma20: true
+  max_addback_per_step: 0.10
+  min_days_between_addback: 3
+  tier34_require_bench_5d_not_new_low: true
+
+reconcile:
+  per_symbol_weight_diff: 0.02
+  total_equity_exposure_diff: 0.03
+
+l3_gap:
+  exposure_scale_threshold: 0.99
+  manual_tier_threshold: 2
+  quarter_count_threshold: 2
+
+# 实盘 CSV：code,name,shares,price — 其中 price 默认为持仓成本，市值用 qlib 收盘价补全
+live_holdings:
+  price_column_semantics: cost  # cost | market
+
+# 肥尾风险报告（generate_fat_tail_risk_report.py）
+fat_tail:
+  lookback_days: 756
+  warmup_buffer_days: 40
+  min_samples: 120
+  tail_quantile: 0.925
+  min_exceed: 25
+  var_confidence: 0.99
+  kappa_n: 30
+  kappa_resamples: 2000     # iid bootstrap aggregation for kappa
+  kappa_seed: 12345         # deterministic report output
+  ewma_span: 60
+  alpha_thin: 4.0           # 安全腿：左尾 α 须 >= 此值
+  alpha_fat: 2.5            # avoid：左尾 α < 此值（厚尾）
+  kappa_safe_max: 0.08      # 安全腿：κ <= 此值
+  kappa_fat_min: 0.25       # avoid：κ >= 此值
+  cvar_red: 0.06            # avoid：日 99% CVaR 差于 -6%
+  cvar_safe_max: 0.02       # 安全腿：日 99% CVaR 优于 -2%（基本仅债券满足）
+  shrink_min_n: 252
+  # barbell 组合生成 + 风险控制（§8 / §9 / §10.1）
+  loss_budget_k: 0.03       # 组合可承受日度左尾损失 |CVaR99|，反解 barbell 两端比例
+  kelly_fraction: 0.25      # 分数 Kelly 系数，per-name 仓位上限
+  n_min: 12                 # κ 定股数下限（过度分散）
+  n_max: 40                 # κ 定股数上限
+  concavity_ratio_warn: 1.6 # loss(p/2)/loss(p) >= 此值判脆弱/凹（short-gamma）
+  crash_q: 0.05             # 经验共振（同处底分位）证据用分位
+  max_name_weight: 0.20     # 生成组合单只权重上限
+  # 组合生成目标与剔除（仅影响 barbell_proposal，不动全局 defensive_codes）
+  barbell_exclude_codes:    # 生成建议中剔除的标的（如不愿持有的防御债）
+    - SH511010
+    - SH511260
+  proposal_objective: return_max  # return_max（满仓进攻·收益最大化）| budget_barbell（安全端预算 barbell）
+  # §7 尾结构 regime / §12.3 路径状态层（默认不切换分布；用 α/κ + 高水位回撤判状态，非 MA 趋势）
+  regime:
+    alpha_recent_days: 252
+    alpha_watch_ratio: 0.75
+    alpha_confirm_ratio: 0.65
+    alpha_confirm_streak: 2
+    kappa_watch_min: 0.15
+    regime_confirm_step_days: 21
+    # 路径/回撤状态（§12.3 高水位线 / §9 路径依赖）：长窗判「破位」，近窗只标「回撤中」
+    drawdown_near_days: 20
+    drawdown_long_days: 120
+    drawdown_pullback_pct: 0.10
+    drawdown_broken_pct: 0.20
+
+# MLFAM 短周期板（generate_short_horizon_board.py · §13）
+short_horizon:
+  horizon: 10
+  # 趋势扫描回看窗口随 H 缩放：win_max=H, win_min=max(floor, round(H*ratio))
+  trend_win_from_horizon: true
+  trend_win_min_ratio: 0.5
+  trend_win_floor: 5
+  win_min: 5   # 仅当 trend_win_from_horizon=false 时使用
+  win_max: 10  # 同上
+  t_thresh: 2.0
+  barrier_mult: 2.0
+  mc_samples: 2000
+  mc_seed: 12345
+  conf_min: 0.15
+  min_samples: 60
+
+# GARCH 条件波动短周期板（generate_garch_short_horizon_board.py · ftsnotes §18–21）
+garch_short_horizon:
+  horizons: [5, 10, 20]
+  price_target_horizons: [1, 5, 10, 20]   # garch_price_targets.csv（H=1 为下一交易日）
+  min_samples: 60
+  vol5_lookback: 120
+  spike_mult: 1.2
+  garch:
+    train_window: 252
+    model: gjr11_t           # gjr11_t | garch11_t | ewma
+    ewma_lambda: 0.94
+    min_train: 60
+    mc_samples: 2000
+    mc_seed: 12345
+    barrier_mult: 1.0
+    arch_test: true
+  # 旁路诊断（写入 garch_jump_diagnostics.csv + REPORT；不改 h5/h10/h20 主 CSV 列）
+  jump:
+    split_threshold: 0.25
+    jump_threshold: 0.08
+    recent_lookback: 20
+    drop_split_returns: false   # 默认 false：不影响 GARCH 拟合数值
+
+# 日内做T（backtest_garch_intraday_t.py · 与持仓风控 garch_short_horizon 分离）
+# 全池回测 2025-06-01..2026-07-13：bm=1.0 + 震荡过滤<2% 平均超额 +4.07pp（默认 bm=2.0 仅 +0.75pp）
+intraday_t:
+  enabled: true
+  strategy: zhen_t_chop_filter
+  horizon: 1                      # H=1：前一收 GARCH 轨，当日 high/low 判定触轨
+  barrier_mult: 1.0               # 做T 止盈/止损障宽；与 garch_short_horizon.garch.barrier_mult 对齐
+  barrier_mult_sweep: [0.8, 1.0, 1.2, 1.5, 1.8, 2.0, 2.5]
+  t_frac: 0.33                    # 参与做T 的仓位比例
+  min_p_tp: 0.03                  # 触轨↑ 概率下限
+  min_p_sl: 0.015                 # 反T 时触轨↓ 概率下限（默认策略不用反T）
+  max_hold_ret_for_zhen_t_pct: 2.0  # 震荡过滤：当日收盘涨幅 < 此值(%) 才做正T
+  chop_hold_pct_sweep: [2, 3, 4, 5]
+  allow_zhen_t: true
+  allow_fan_t: false              # 单边/震荡阶段不做反T
+  rebuy_on_sl: true               # 正T 后若同日也触下轨，在 sl 买回
+
+# HMM 机制转换短周期板（generate_hmm_short_horizon_board.py · ftsnotes §34）
+hmm_short_horizon:
+  horizons: [5, 10, 20]
+  n_states: 2
+  train_window: 252
+  min_samples: 60
+  emission: student_t        # student_t | normal
+  mc_samples: 2000
+  barrier_mult: 2.0
+  mc_seed: 12345
+  drop_split_returns: true   # 仅 HMM：训练时剔除拆分日
+  split_threshold: 0.25
+  nu_fixed: 5.0
+  min_sigma_ratio: 1.15      # σ_high/σ_low 低于此值 → 两态未分离，p_high 不可解读
+  regime_filter_lookback: 40 # 仅用最近 N 日前向滤波估计 p_high/p_low（避免粘性转移锁死）
+  mc_zero_mean: true          # MC/分位数用零均值（与 GARCH Zero mean 对齐）；μ_mix 仅展示
+  mc_recent_vol_scale: true   # vol_5d/vol_20d < 1 时缩小 MC σ 与障宽
+  mc_vol_short_window: 5
+  mc_vol_long_window: 20
+  mc_vol_scale_floor: 0.5
+
+# 3-state 马尔科夫跃迁板（generate_regime_transition_board.py · ftsnotes §34）
+regime_transition:
+  n_states: 3
+  train_window: 252
+  min_samples: 60
+  emission: student_t
+  nu_fixed: 5.0
+  regime_filter_lookback: 40
+  min_sigma_ratio: 1.15
+  z_surprise_thr: 2.0
+  rule_jump_std_mult: 2.5
+  drop_split_returns: true
+  split_threshold: 0.25
+  max_em_iter: 80
+  days_in_regime_max_lookback: 30
+  min_direction_mu_mult: 0.25
+  min_state_mass: 0.02
+  hard_ambiguous_require_both_separation_fails: true
+  # Locked: predictive-mixture CDF outside [1-q*, q*] counts as regime switch (bilateral).
+  switch_quantile_q: 0.90
+  switch_quantile_bilateral: true
+
+# Pack 全 universe 盘中价（generate 输出 universe_live_close.csv）
+universe_live_close:
+  include_spot: true  # as_of=今天时拉 AkShare ETF 最新价；持仓亦优先 spot，无 spot 才用 portfolio_live
+
+# 明日候选池 digest（generate_tomorrow_digest.py · H=1 旁路）
+tomorrow_digest:
+  horizon: 1
+  garch_barrier_mult: 1.0       # 与 intraday_t / garch_short_horizon.garch 对齐
+  calibration_min_n_obs: 10
+  brier_random: 0.67            # 三分类均匀猜基线
+  brier_good: 0.33
+  band_tol: 0.20                # q05/q95 覆盖率偏差容忍
+  shrink_n_obs: 20              # 小样本 shrink 到池均值
+  combined_mode: min            # min | mean — 综合可信度合并
+  candidates_only: false         # 仅 持仓=候选
+  topk:
+    enabled: true
+    rank_all: true               # CSV 列出全部标的排名（不只 Top-K）
+    k: 8                         # 等权参考只标注前 K 只
+    rank_rule: upside_x_cred     # dir_x_cred | upside_x_cred | composite
+    require_positive_direction: true
+    avoid_leg_penalty: 0.5       # avoid 腿分数 ×0.5，不剔除
+    min_credibility: 0.003       # 等权参考门槛（不筛行）
+    min_direction: 0.0         # 等权参考：garch 方向偏必须 > 0
+    exclude_avoid_leg: false      # 列出全部标的，含 avoid（自行筛选）
+    candidates_only: false       # 与 digest 对齐，含持仓
+
+# 可买排名（generate_buyable_rank.py · 跨表硬过滤 + tomorrow pick_score）
+buyable_rank:
+  k: 8
+  rank_all: true                 # CSV 保留被拒行（pass_filters=false）便于审计
+  exclude_avoid_leg: true
+  exclude_broken_path: true      # pool_risk 状态=破位
+  exclude_jump_flags: true
+  exclude_trend_flags: true
+  jump_reject_flags: [recent_jump, live_price_gap]
+  trend_reject_flags: [bear_stack, deep_below_ma20, "below_ma20_3d+"]
+  prefer_pool_risk: "252"        # 252 | 756
+  min_pick_score: null           # 可选下限；null 不卡分数
+
+# 左侧波动 digest（generate_left_side_digest.py · H=5）
+left_side_digest:
+  horizon: 5
+  calibration_min_n_obs: 10
+  brier_random: 0.67
+  brier_good: 0.33
+  band_tol: 0.20
+  shrink_n_obs: 20
+  combined_mode: min
+  candidates_only: false
+  topk:
+    enabled: true
+    rank_all: true
+    k: 8
+    rank_rule: compression_x_spike_x_down  # compression_x_spike | compression_x_spike_x_down | transition_x_spike_x_down
+    min_credibility: 0.003
+    require_touch_down_min: 0.15
+    max_vol5_pct: 0.35
+    exclude_jump_flags: true
+    exclude_avoid_leg: false
+    candidates_only: false
