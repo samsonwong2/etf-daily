@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run the eight end-of-day commands in handbook order. Both dates are required.
+# Run the end-of-day commands in handbook order, then the morning receipt.
 # Missing config.env or the local json exits before any Python process starts.
 set -euo pipefail
 
@@ -91,3 +91,7 @@ PYTHONPATH="${PROJECT_ROOT}/src" "$PY" src/etf_daily/triggers/scan.py \
   --as-of "${AS_OF}" \
   --next-day "${NEXT_DAY}" \
   --jobs 8
+
+echo "accept 9/9 morning receipt"
+PYTHONPATH="${PROJECT_ROOT}/src" "$PY" -m etf_daily.morning \
+  --as-of "${AS_OF}" --next-day "${NEXT_DAY}"

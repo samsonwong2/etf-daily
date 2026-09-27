@@ -264,7 +264,7 @@ def main(argv: list[str] | None = None) -> int:
     raw = list(sys.argv[1:] if argv is None else argv)
     if not raw or raw[0] in {"-h", "--help"}:
         print(
-            "etf-daily commands: etl, pool, cluster-review, regime, adaptive, listing, hrp, triggers"
+            "etf-daily commands: etl, pool, cluster-review, regime, adaptive, listing, hrp, triggers, morning"
         )
         return 0
     command, rest = raw[0], raw[1:]
@@ -280,6 +280,10 @@ def main(argv: list[str] | None = None) -> int:
         return _hrp(rest)
     if command == "triggers":
         return _triggers(rest)
+    if command == "morning":
+        from etf_daily.morning import main as morning_main
+
+        return morning_main(rest)
     parser = build_parser()
     args, extra_args = parser.parse_known_args(raw)
 

@@ -78,6 +78,10 @@ Same dendrogram with a coarser distance cut of `0.8`. The page is `$HRP_OUTPUT_D
 
 Scans the from-listing HTML and writes next-session trigger prices back into that same directory. `YYYYMMDD` in the line above is a placeholder. For the 2026-09-24 batch, replace it with `20260924`. When `--as-of` and `--next-day` are omitted, the date in the directory name is T, and T+1 is the next weekday. This skip does not know exchange holidays. Pass `--next-day` yourself when the next session is not the next weekday.
 
+### `etf-daily morning --as-of YYYY-MM-DD --next-day YYYY-MM-DD`
+
+Writes `morning.html` and `morning_receipt.json` into `$PLOTLY_ROOT/{YYYYMMDD}_from_listing`. The page is a receipt. `STOP` means a landed file is missing or the last bar is not `--as-of`, and the short list is hidden. `WARN` still shows the list: `go_nogo` pass is model calibration, and the reversal file is often older because the daily run skips rebuilding it. `scripts/accept_eod.sh` runs this after triggers. Re-run this command alone when the receipt failed and the earlier files are already on disk.
+
 ## Tests
 
 ```bash
