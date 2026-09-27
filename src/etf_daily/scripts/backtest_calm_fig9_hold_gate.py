@@ -343,7 +343,7 @@ def build_markdown(df: pd.DataFrame, html_dir: Path, morph_csv: Path) -> str:
     lines.append("- 通道内 = 未触 fig9 上轨且未触 fig9 下轨（`not touch_hi` 且 `not touch_lo`）。")
     lines.append("- 向上 = `fig9_g > 0`；慢 = `0 < fig9_g ≤ 0.50`。")
     lines.append(
-        "- 先验：[六状态趋势划分_八品种验证.md](六状态趋势划分_八品种验证.md) §7.2 "
+        "- 先验：`docs/六状态趋势划分_八品种验证.md` §7.2 "
         "SH512530 ③空仓夏普 0.56→0.13。GateStrict 在 g≤0 时空仓，接近空③。"
     )
     lines.append("- 本轮只出证据，不改 `TREE_POS`。")

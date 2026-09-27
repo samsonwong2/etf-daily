@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pool backtest of fig12 six-state overlays (documents/六状态趋势划分 §7).
+"""Pool backtest of fig12 six-state overlays (docs/六状态趋势划分_八品种验证.md §7).
 
 For each from_listing adaptive HTML (bonds skipped):
   - recompute causal six states
@@ -270,7 +270,7 @@ def build_markdown(df: pd.DataFrame, html_dir: Path, skipped: list[str]) -> str:
     lines.append("# 图12 六状态：20260915 全品种回测（状态 × 形态）")
     lines.append("")
     lines.append(
-        f"> 目的：把 [六状态趋势划分_八品种验证.md](六状态趋势划分_八品种验证.md) §7 的"
+        f"> 目的：把 `docs/六状态趋势划分_八品种验证.md` §7 的"
         f"「状态 × 下跌形态」二维映射扩到 20260915_from_listing 全池非债券品种"
     )
     rel = html_dir
@@ -288,8 +288,8 @@ def build_markdown(df: pd.DataFrame, html_dir: Path, skipped: list[str]) -> str:
         "--write-md documents/图12六状态_20260915全品种回测_状态x形态.md`"
     )
     lines.append(
-        "> 相关：[V3否决规则_七品种回测.md](V3否决规则_七品种回测.md)、"
-        "[图12六状态_切换点买卖与三品种交叉验证.md](图12六状态_切换点买卖与三品种交叉验证.md)"
+        "> 相关：旧仓库未迁入的 `V3否决规则_七品种回测.md`、"
+        "`图12六状态_切换点买卖与三品种交叉验证.md`"
     )
     lines.append("")
     lines.append("## 0. 样本")
@@ -496,7 +496,7 @@ def build_markdown(df: pd.DataFrame, html_dir: Path, skipped: list[str]) -> str:
     lines.append("## 4. 与八品种 §7.3 对照")
     lines.append("")
     lines.append(
-        "八品种表（[六状态趋势划分_八品种验证.md](六状态趋势划分_八品种验证.md) §7.3）建议："
+        "八品种表（`docs/六状态趋势划分_八品种验证.md` §7.3）建议："
         "深熊型 ②③空仓；V 型 ②持有（可加 8% 止损）、③空仓；平稳型全程持有。"
     )
     lines.append("")

@@ -1,6 +1,6 @@
 """Causal six-state classifier and fig12 (clean K + state vrects).
 
-Priority chain matches documents/六状态趋势划分_八品种验证.md §1:
+Priority chain matches docs/六状态趋势划分_八品种验证.md §1:
   ①过热 → ②急跌刀锋 → ③趋势下行 → ⑤趋势上行 → ④底部修复 → ⑥震荡
 """
 from __future__ import annotations

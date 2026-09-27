@@ -357,7 +357,7 @@ def write_markdown(df: pd.DataFrame, path: Path, *, listing_dir: Path) -> None:
         "",
         "研究对照，不是生产规则，也不是买入信号。「上涨趋势已启动」只表示图9 震荡尺停用。",
         "判据：[`平稳44_图9路径摆动画像_20260916.md`](../../../gitee/skfolio_csi300/etf_strategy_clean/documents/平稳44_图9路径摆动画像_20260916.md) §3 五条，",
-        "加上 [`图9_G1G2活开关_趋势失效规则.md`](../../../gitee/skfolio_csi300/etf_strategy_clean/documents/图9_G1G2活开关_趋势失效规则.md) 的 G1；",
+        "加上 `docs/图9_G1G2活开关_趋势失效规则.md` 的 G1；",
         "G2 不做全池成交重建。未恢复从**最近一次**分位 ≥80% 或收在上轨外的那根 K 算起：满 15 根仍没有回到 50%，或当前连续 5 个收盘在上轨外；并且图7、图8 的 g 仍为正。",
         "中轴附近用 `pos[t−10] ≤ 0.55`（黄金样例 49%）。",
         "",

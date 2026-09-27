@@ -93,7 +93,7 @@ def build_fig12_block(fig_html: str, *, state: str) -> str:
     heading = (
         f'<h3 style="font-family:sans-serif;padding-left:12px">图12 六状态背景色'
         f'<span style="font-size:13px;color:#666">（背景=六状态趋势划分，'
-        f"判定方法见 documents/六状态趋势划分_八品种验证.md §8；"
+        f"判定方法见 docs/六状态趋势划分_八品种验证.md §8；"
         f"当前状态：{state}）</span></h3>"
     )
     return (
