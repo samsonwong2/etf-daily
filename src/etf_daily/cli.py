@@ -270,11 +270,34 @@ def _triggers(rest: list[str]) -> int:
     return int(result) if isinstance(result, int) else 0
 
 
+def _b1235(rest: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="etf-daily b1235")
+    parser.add_argument("--listing-dir", required=True)
+    parser.add_argument("--as-of", default=None)
+    args, unknown = parser.parse_known_args(rest)
+    listing = _resolve_listing(args.listing_dir)
+    as_of = args.as_of or _as_of_from_listing(listing)
+    if not as_of:
+        print("pass --as-of YYYY-MM-DD", file=sys.stderr)
+        return 2
+    argv = [
+        "--listing-dir",
+        str(listing),
+        "--as-of",
+        as_of,
+        *unknown,
+    ]
+    from etf_daily.scripts.scan_b1235_checklist import main as b1235_main
+
+    result = b1235_main(argv)
+    return int(result) if isinstance(result, int) else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     raw = list(sys.argv[1:] if argv is None else argv)
     if not raw or raw[0] in {"-h", "--help"}:
         print(
-            "etf-daily commands: etl, pool, cluster-review, regime, adaptive, listing, hrp, triggers, morning"
+            "etf-daily commands: etl, pool, cluster-review, regime, adaptive, listing, hrp, triggers, b1235, morning"
         )
         return 0
     command, rest = raw[0], raw[1:]
@@ -290,6 +313,8 @@ def main(argv: list[str] | None = None) -> int:
         return _hrp(rest)
     if command == "triggers":
         return _triggers(rest)
+    if command == "b1235":
+        return _b1235(rest)
     if command == "morning":
         from etf_daily.morning import main as morning_main
 
