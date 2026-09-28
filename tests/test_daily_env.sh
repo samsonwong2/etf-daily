@@ -126,4 +126,21 @@ printf 'PLOTLY_ROOT=/tmp/etf-daily-sourced-plotly\nHRP_MEMBERSHIP_CSV=\n' > "${c
 )
 rm -f "${cfg}"
 
+pack_root="$(mktemp -d)"
+day="${pack_root}/20260928"
+mkdir -p "${day}/100000" "${day}/140000" "${day}/150000"
+printf 'x\n' > "${day}/100000/live_snapshot.csv"
+printf 'x\n' > "${day}/100000/signals_oos.csv"
+printf 'x\n' > "${day}/140000/live_snapshot.csv"
+printf 'x\n' > "${day}/150000/live_snapshot.csv"
+printf 'x\n' > "${day}/150000/signals_oos.csv"
+(
+  # shellcheck disable=SC1091
+  source scripts/daily_env.sh
+  found="$(latest_intraday_pack "${day}")"
+  [[ "${found}" == "${day}/150000" ]]
+  empty="$(latest_intraday_pack "${pack_root}/missing")"
+  [[ -z "${empty}" ]]
+)
+
 echo "daily_env checks passed"

@@ -15,9 +15,9 @@
 #   FORCE_MONTH_REBUILD=1 AS_OF=... PY=... ./scripts/daily_regime_transition_validation.sh
 #
 # 盘中用法（独立 timestamp 目录，Qlib 历史 + AkShare 实时快照）:
+#   etf-daily regime --skip-html --intraday
+#   # 子目录名默认是运行时刻 HHMMSS，不用设 OUT_STAMP。
 #   INTRADAY=1 AS_OF=2026-07-23 PY=... ./scripts/daily_regime_transition_validation.sh
-#   # 可选固定子目录名（默认 HHMMSS）:
-#   INTRADAY=1 AS_OF=2026-07-23 OUT_STAMP=1200 PY=... ./scripts/daily_regime_transition_validation.sh
 #
 # 可选：生成三角操作清单 OPS md（④ scan_triangle_decision_ops）:
 #   RUN_OPS_SCAN=1 AS_OF=2026-07-27 PY=... ./scripts/daily_regime_transition_validation.sh

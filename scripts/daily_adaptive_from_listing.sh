@@ -2,8 +2,12 @@
 # 每日生成 from_listing 自适应 HTML（上市日 → AS_OF）
 #
 # EOD 增量（默认：复用前一天 *_from_listing HTML，只补一根 K 线）:
+#   etf-daily listing --as-of 2026-09-04
 #   PY=~/etf-daily-output/python/envs/py312/bin/python ./scripts/daily_adaptive_from_listing.sh
 #   AS_OF=2026-09-04 JOBS=8 PY=... ./scripts/daily_adaptive_from_listing.sh
+#
+# 盘中：自动用今天最新一份含 signals_oos.csv 的盘中包，不用写 OUT_STAMP:
+#   etf-daily listing --intraday
 #
 # 强制全量重画:
 #   INCREMENTAL=0 AS_OF=2026-09-04 PY=... ./scripts/daily_adaptive_from_listing.sh
@@ -59,6 +63,25 @@ fi
 AS_OF_TAG="$(date -d "${AS_OF}" +%Y%m%d)"
 CONFIG_SOURCE_DIR="${CONFIG_SOURCE_DIR:-${PLOTLY_ROOT}/${AS_OF_TAG}all_adaptive}"
 HTML_OUT_DIR="${HTML_OUT_DIR:-${PLOTLY_ROOT}/${AS_OF_TAG}_from_listing}"
+INTRADAY="${INTRADAY:-0}"
+if [[ "${INTRADAY}" == "1" || "${INTRADAY}" == "true" || "${INTRADAY}" == "yes" ]]; then
+  if [[ -z "${LIVE_SNAPSHOT}" || "${VALIDATION_DIR}" == "${PROJECT_ROOT}/runtime/decision_packs/20260720/regime_transition_validation_q90_to0720" ]]; then
+    _PACK="$(latest_intraday_pack "${PROJECT_ROOT}/runtime/decision_packs/intraday/${AS_OF_TAG}")"
+    if [[ -z "${_PACK}" ]]; then
+      echo "[ERROR] 今天还没有盘中验证包：runtime/decision_packs/intraday/${AS_OF_TAG}/<HHMMSS>/" >&2
+      echo "  先跑：etf-daily regime --skip-html --intraday" >&2
+      exit 3
+    fi
+    if [[ "${VALIDATION_DIR}" == "${PROJECT_ROOT}/runtime/decision_packs/20260720/regime_transition_validation_q90_to0720" ]]; then
+      VALIDATION_DIR="${_PACK}"
+    fi
+    if [[ -z "${LIVE_SNAPSHOT}" ]]; then
+      LIVE_SNAPSHOT="${_PACK}/live_snapshot.csv"
+    fi
+    echo "[INFO] intraday pack: ${VALIDATION_DIR}"
+    echo "[INFO] intraday snapshot: ${LIVE_SNAPSHOT}"
+  fi
+fi
 
 # Resolve incremental mode: INCREMENTAL_MODE wins if set; else INCREMENTAL=1 → html.
 if [[ -z "${INCREMENTAL_MODE}" ]]; then

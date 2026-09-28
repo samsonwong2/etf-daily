@@ -21,4 +21,23 @@ export PYTHONPATH
 if [[ -z "${HRP_MEMBERSHIP_CSV:-}" ]]; then
   unset HRP_MEMBERSHIP_CSV || true
 fi
+# Latest intraday pack for one day: both the signal file and the frozen snapshot.
+# Stamp directories are HHMMSS names; the newest name is the newest capture.
+latest_intraday_pack() {
+  local day_dir="$1"
+  local best="" d base
+  [[ -d "${day_dir}" ]] || return 0
+  shopt -s nullglob
+  for d in "${day_dir}"/*; do
+    [[ -d "${d}" ]] || continue
+    [[ -f "${d}/live_snapshot.csv" && -f "${d}/signals_oos.csv" ]] || continue
+    base="$(basename "${d}")"
+    if [[ -z "${best}" || "${base}" > "$(basename "${best}")" ]]; then
+      best="${d}"
+    fi
+  done
+  shopt -u nullglob
+  printf '%s\n' "${best}"
+}
+
 cd "${PROJECT_ROOT}"

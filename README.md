@@ -82,6 +82,30 @@ Scans the from-listing HTML and writes next-session trigger prices back into tha
 
 Writes `morning.html` and `morning_receipt.json` into `$PLOTLY_ROOT/{YYYYMMDD}_from_listing`. The page is a receipt. `STOP` means a landed file is missing or the last bar is not `--as-of`, and the short list is hidden. `WARN` still shows the list: `go_nogo` pass is model calibration, and the reversal file is often older because the daily run skips rebuilding it. `scripts/accept_eod.sh` runs this after triggers. Re-run this command alone when the receipt failed and the earlier files are already on disk.
 
+## Intraday
+
+Run these during the session, while Qlib still has no bar for today. `--as-of` defaults to today and must be that machine date, because the AkShare snapshot rejects any other day. The clock names the pack directory. Do not pass a time stamp.
+
+```bash
+etf-daily regime --skip-html --intraday
+etf-daily adaptive --intraday
+etf-daily listing --intraday
+```
+
+Run them in that order. `listing` reads today's `$PLOTLY_ROOT/{YYYYMMDD}all_adaptive` from `adaptive`. If that directory is missing, `listing` exits and prints the path.
+
+### `etf-daily regime --skip-html --intraday`
+
+Fetches a frozen AkShare snapshot, then writes today's signal shard and reversal labels into `runtime/decision_packs/intraday/{YYYYMMDD}/{HHMMSS}/`. `HHMMSS` is the time the command starts. The formal shard under `runtime/decision_packs/20260720` stays as it was. `--skip-html` skips the regime HTML. Leave off `--skip-rebuild`: the reversal labels are part of this pack. `listing` later picks the newest directory under that day which contains both `signals_oos.csv` and `live_snapshot.csv`.
+
+### `etf-daily adaptive --intraday`
+
+Draws the adaptive-stage HTML through today. It copies configs from the newest `$PLOTLY_ROOT/{YYYYMMDD}all_adaptive` whose date is before today, and it does not retrain. It takes a new AkShare snapshot for the chart. HTML goes to `$PLOTLY_ROOT/{YYYYMMDD}all_adaptive`. That directory is the config source for the intraday `listing` command.
+
+### `etf-daily listing --intraday`
+
+Draws one HTML per name from listing date through today, and appends the live bar from the regime pack above. HTML goes to `$PLOTLY_ROOT/{YYYYMMDD}_from_listing`. Incremental mode appends each missing session after the newest older `*_from_listing` directory. Figure 12 is added unless `FIG12=0`. If today's regime pack is missing, the command exits and tells you to run `etf-daily regime --skip-html --intraday` first.
+
 ## Tests
 
 ```bash

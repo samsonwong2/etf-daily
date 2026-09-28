@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # 日中自适应 HTML 一键入口：抓快照 → 复用上一批 configs → 叠 live bar 出图
 #
-# 用法（一般不用改日期）:
+# 用法（日期默认今天，快照目录自己取当前时刻）:
+#   etf-daily adaptive --intraday
 #   PY=~/etf-daily-output/python/envs/py312/bin/python \
 #     ./scripts/daily_adaptive_stage_html_intraday.sh
 #

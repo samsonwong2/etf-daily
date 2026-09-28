@@ -148,17 +148,27 @@ def _dated(rest: list[str], prog: str, script: str) -> int:
     parser = argparse.ArgumentParser(prog=prog)
     parser.add_argument("--as-of", default=date.today().isoformat())
     parser.add_argument("--jobs", type=int, default=8)
+    parser.add_argument(
+        "--intraday",
+        action="store_true",
+        help="Live session: AkShare snapshot, clock-named pack. Do not pass a stamp.",
+    )
     regime = script.startswith("daily_regime")
+    listing = "from_listing" in script
     if regime:
         parser.add_argument("--skip-rebuild", action="store_true")
         parser.add_argument("--skip-html", action="store_true")
         parser.add_argument("--force-month-rebuild", action="store_true")
     args = parser.parse_args(rest)
+    if args.intraday and script == "daily_adaptive_stage_html.sh":
+        script = "daily_adaptive_stage_html_intraday.sh"
     extra = {"AS_OF": args.as_of, "JOBS": str(args.jobs)}
     if regime:
         extra["SKIP_REBUILD"] = "1" if args.skip_rebuild else "0"
         extra["SKIP_HTML"] = "1" if args.skip_html else "0"
         extra["FORCE_MONTH_REBUILD"] = "1" if args.force_month_rebuild else "0"
+    if args.intraday and (regime or listing):
+        extra["INTRADAY"] = "1"
     return _run_shell(script, extra)
 
 
