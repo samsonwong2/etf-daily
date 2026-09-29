@@ -294,7 +294,7 @@ def evaluate_checklist_row(
     min_rr: float = DEFAULT_MIN_RR,
     listing_age_years: float | None = None,
     touch_panels: tuple[str, ...] = ("fig9", "fig10"),
-    b3_mode: Literal["default", "fig10_only", "reclaim_from_lo"] = "default",
+    b3_mode: Literal["default", "fig10_only", "reclaim_from_lo", "fig11_or_reclaim"] = "default",
 ) -> ChecklistResult:
     """Score one day against B1–B6 / S1–S3."""
     px = float(row["px"])
@@ -351,6 +351,8 @@ def evaluate_checklist_row(
         )
     elif b3_mode == "fig10_only":
         b3 = bool(row.get("fig10_above_path", False) or reclaim)
+    elif b3_mode == "fig11_or_reclaim":
+        b3 = bool(row.get("fig11_above_path", False) or reclaim)
     else:  # reclaim_from_lo
         b3 = reclaim
     res.flags["B3_short_reclaim"] = b3
@@ -478,7 +480,7 @@ def build_checklist_flags_frame(
     deep_gap: float = DEFAULT_DEEP_GAP,
     min_rr: float = DEFAULT_MIN_RR,
     touch_panels: tuple[str, ...] = ("fig9", "fig10"),
-    b3_mode: Literal["default", "fig10_only", "reclaim_from_lo"] = "default",
+    b3_mode: Literal["default", "fig10_only", "reclaim_from_lo", "fig11_or_reclaim"] = "default",
 ) -> pd.DataFrame:
     """Vector-friendly daily checklist flags for backtests."""
     ms_en = enrich_frame_for_checklist(ms)
@@ -548,7 +550,7 @@ def detect_checklist_entries(
     deep_gap: float = DEFAULT_DEEP_GAP,
     min_rr: float = DEFAULT_MIN_RR,
     touch_panels: tuple[str, ...] = ("fig9", "fig10"),
-    b3_mode: Literal["default", "fig10_only", "reclaim_from_lo"] = "default",
+    b3_mode: Literal["default", "fig10_only", "reclaim_from_lo", "fig11_or_reclaim"] = "default",
     code: str = "UNK",
     atr_s: pd.Series | None = None,
     regime_s: pd.Series | None = None,
