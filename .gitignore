@@ -7,3 +7,4 @@ configs/production_regime_switch_ewma_shrink.json
 temp/
 runtime/
 *.html
+.gstack/
