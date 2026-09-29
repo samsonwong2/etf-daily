@@ -79,6 +79,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="default: {listing-dir}/b1235_checklist_{as-of}.csv")
     p.add_argument("--deep-gap", type=float, default=DEFAULT_DEEP_GAP)
     p.add_argument("--min-rr", type=float, default=DEFAULT_MIN_RR)
+    p.add_argument(
+        "--b3-mode",
+        default="default",
+        choices=["default", "fig10_only", "reclaim_from_lo", "fig11_or_reclaim"],
+        help="fig11_or_reclaim drops the 站上图10 branch (see etf-daily b1235-backtest)",
+    )
+    p.add_argument(
+        "--min-listing-years",
+        type=float,
+        default=0.0,
+        help="B1235达成 also requires listing age ≥ this (unknown age passes)",
+    )
     return p.parse_args(argv)
 
 
@@ -129,6 +141,8 @@ def scan_one(
     listing_start: str | None,
     deep_gap: float,
     min_rr: float,
+    b3_mode: str = "default",
+    min_listing_years: float = 0.0,
 ) -> dict[str, str]:
     code, name = pool.parse_html_label(html)
     close, ohlcv = load_ohlcv_from_regime_html(html)
@@ -156,11 +170,14 @@ def scan_one(
         deep_gap=deep_gap,
         min_rr=min_rr,
         listing_age_years=age_years,
+        b3_mode=b3_mode,  # type: ignore[arg-type]
     )
     b1 = bool(cr.flags.get("B1_position"))
     b2 = bool(cr.flags.get("B2_long_ok"))
     b3 = bool(cr.flags.get("B3_short_reclaim"))
     b5 = bool(cr.flags.get("B5_rr_ok"))
+    age_ok = age_years is None or age_years >= min_listing_years
+    passed = b1 and b2 and b3 and b5 and age_ok
 
     px = float(row["px"])
     fig10_lower = _f(row.get("fig10_lower"))
@@ -198,9 +215,9 @@ def scan_one(
         "图10目标价": _px(row.get("fig10_path")),
         "盈亏比图10": _rr(cr.rr_to_fig10_path),
         "B5达成": _yn(b5),
-        "B1235达成": _yn(b1 and b2 and b3 and b5),
+        "B1235达成": _yn(passed),
         "_gap": _f(row.get("fig8_gap")),
-        "_pass": bool(b1 and b2 and b3 and b5),
+        "_pass": passed,
     }
 
 
@@ -226,6 +243,8 @@ def main(argv: list[str] | None = None) -> int:
                     listing_start=listing_dates.get(code.upper()),
                     deep_gap=float(args.deep_gap),
                     min_rr=float(args.min_rr),
+                    b3_mode=args.b3_mode,
+                    min_listing_years=float(args.min_listing_years),
                 )
             )
         except Exception as exc:  # noqa: BLE001
