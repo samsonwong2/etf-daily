@@ -63,7 +63,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--b3-mode",
         default="default",
-        choices=["default", "fig10_only", "reclaim_from_lo"],
+        choices=["default", "fig10_only", "reclaim_from_lo", "fig11_or_reclaim"],
     )
     p.add_argument(
         "--out-dir",

@@ -39,6 +39,7 @@ etf-daily hrp --as-of 2026-09-29
 etf-daily hrp --dist-t 0.8 --as-of 2026-09-29
 etf-daily triggers --listing-dir "$PLOTLY_ROOT/20260929_from_listing"
 etf-daily b1235 --listing-dir "$PLOTLY_ROOT/20260929_from_listing"
+etf-daily b1235-backtest --listing-dir "$PLOTLY_ROOT/20260929_from_listing"
 ```
 
 `listing` is incremental unless the shell is run with `INCREMENTAL=0`. Figure 12 runs unless `FIG12=0`.
@@ -91,6 +92,12 @@ The close is the fig7 qfq candlestick in each HTML. The four flags match `evalua
 - **B5** reward/risk ≥ 2: the target is the fig8 or fig10 path (a path below the close is not a target), and the stop is close − ATR20.
 
 `B1235达成` is true only when all four pass. The CSV lists the raw reading for each condition and a yes/blank verdict. Names that pass all four sort first; the rest sort by fig8 discount, deepest first.
+
+Two opt-in flags change the verdict; the defaults keep the rules above. `--b3-mode fig11_or_reclaim` drops the "back above the fig10 path" branch of B3. `--min-listing-years 1` also requires one year since listing.
+
+### `etf-daily b1235-backtest --listing-dir "$PLOTLY_ROOT/YYYYMMDD_from_listing"`
+
+Replays the B1235 scoring on every historical bar of every equity HTML in that directory and writes `b1235_ablation.{md,csv}`, `b1235_yearly.csv`, and `b1235_basket.csv` under `{listing-dir}/b1235_backtest`. Entry is the next bar's open. It reports forward 5/10/20/40-day returns, hit rate, excess over the same-date pool mean, 20-day max adverse excursion, and an ATR-stop / fig8-target exit simulation. It also reports an equal-weight basket that holds each signal for 20 days. Results are split in-sample / out-of-sample at `--split-date` (default 2022-01-01). The variants are leave-one-condition-out, single conditions, each branch of B1/B2/B3, and sweeps of deep gap, min R:R, stop ATR multiple, and B5 target. `--ohlcv-dir DIR` reads `CODE.csv` files (`date,open,high,low,close`) instead of HTML. The first run caches the panel in `panel_cache.pkl`; pass `--no-cache` after the data changes.
 
 ### `etf-daily morning --as-of YYYY-MM-DD --next-day YYYY-MM-DD`
 
