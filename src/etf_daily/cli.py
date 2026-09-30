@@ -293,6 +293,23 @@ def _b1235(rest: list[str]) -> int:
     return int(result) if isinstance(result, int) else 0
 
 
+def _rules7(rest: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="etf-daily rules7")
+    parser.add_argument("--listing-dir", required=True)
+    parser.add_argument("--as-of", default=None)
+    args, unknown = parser.parse_known_args(rest)
+    listing = _resolve_listing(args.listing_dir)
+    as_of = args.as_of or _as_of_from_listing(listing)
+    if not as_of:
+        print("pass --as-of YYYY-MM-DD", file=sys.stderr)
+        return 2
+    argv = ["--listing-dir", str(listing), "--as-of", as_of, *unknown]
+    from etf_daily.scripts.scan_rules7_checklist import main as rules7_main
+
+    result = rules7_main(argv)
+    return int(result) if isinstance(result, int) else 0
+
+
 def _b1235_backtest(rest: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="etf-daily b1235-backtest", add_help=False)
     parser.add_argument("--listing-dir", default=None)
@@ -311,7 +328,7 @@ def main(argv: list[str] | None = None) -> int:
     if not raw or raw[0] in {"-h", "--help"}:
         print(
             "etf-daily commands: etl, pool, cluster-review, regime, adaptive, listing, hrp, triggers, b1235, "
-            "b1235-backtest, morning"
+            "b1235-backtest, rules7, morning"
         )
         return 0
     command, rest = raw[0], raw[1:]
@@ -331,6 +348,8 @@ def main(argv: list[str] | None = None) -> int:
         return _b1235(rest)
     if command == "b1235-backtest":
         return _b1235_backtest(rest)
+    if command == "rules7":
+        return _rules7(rest)
     if command == "morning":
         from etf_daily.morning import main as morning_main
 

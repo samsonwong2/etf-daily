@@ -40,6 +40,7 @@ etf-daily hrp --dist-t 0.8 --as-of 2026-09-29
 etf-daily triggers --listing-dir "$PLOTLY_ROOT/20260929_from_listing"
 etf-daily b1235 --listing-dir "$PLOTLY_ROOT/20260929_from_listing"
 etf-daily b1235-backtest --listing-dir "$PLOTLY_ROOT/20260929_from_listing"
+etf-daily rules7 --listing-dir "$PLOTLY_ROOT/20260929_from_listing"
 ```
 
 `listing` is incremental unless the shell is run with `INCREMENTAL=0`. Figure 12 runs unless `FIG12=0`.
