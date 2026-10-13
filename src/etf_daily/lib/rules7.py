@@ -20,7 +20,14 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from etf_daily.scripts.backtest_fig9_touch import variant_masks
+from etf_daily.scripts.backtest_fig9_touch import (
+    DEFAULT_FIG7_PREM,
+    DEFAULT_FIG10_POS_MIN,
+    DEFAULT_NEAR_PCT,
+    DEFAULT_POS_MIN,
+    DEFAULT_VOL_CLUSTER,
+    variant_masks,
+)
 
 BARS_PER_YEAR = 250
 MIN_HISTORY_BARS = BARS_PER_YEAR
@@ -58,7 +65,7 @@ TYPE_SHORT = "历史不足"
 TYPE_PARAMS: dict[str, RuleSpec] = {
     TYPE_SMOOTH: RuleSpec(b1=True, fast_block=False, sell="fig8", g1_hold=False, trail=0.08),
     TYPE_TREND: RuleSpec(b1=True, fast_block=False, sell="fig9", g1_hold=True, trail=0.15),
-    TYPE_HIVOL: RuleSpec(b1=False, fast_block=True, sell="fig8", g1_hold=True, trail=None),
+    TYPE_HIVOL: RuleSpec(b1=False, fast_block=True, sell="fig8", g1_hold=True, trail=0.30),
     TYPE_CYCLE: RuleSpec(b1=True, fast_block=False, sell="fig9", g1_hold=True, trail=0.12),
     TYPE_SHORT: RuleSpec(b1=True, fast_block=True, sell="fig9", g1_hold=True, trail=0.15),
 }
@@ -67,7 +74,7 @@ OVERRIDES: dict[str, tuple[str, RuleSpec]] = {
     "SH512530": (TYPE_SMOOTH, RuleSpec(True, False, "fig8", False, 0.08)),
     "SH518880": (TYPE_TREND, RuleSpec(False, True, "fig9", True, 0.15)),
     "SH513100": (TYPE_TREND, RuleSpec(True, False, "fig9", True, 0.08)),
-    "SH515880": (TYPE_HIVOL, RuleSpec(False, True, "fig8", True, None)),
+    "SH515880": (TYPE_HIVOL, RuleSpec(False, True, "fig8", True, 0.30)),
     "SH512690": (TYPE_CYCLE, RuleSpec(True, True, "fig9", True, 0.12)),
     "SZ159981": (TYPE_CYCLE, RuleSpec(True, False, "fig9", True, 0.08)),
     "SZ159892": (TYPE_CYCLE, RuleSpec(False, True, "fig8", False, None)),
@@ -184,8 +191,10 @@ def run_state_machine(
     pk: float | None = None
     in_trend = False
     action, why = "观望", ""
+    masked = False
     for i in range(n):
         act, reason = ("观望", "")
+        masked = False
         if not pos:
             if b[i]:
                 pos, bi, fill, pk, in_trend = True, i, i + 1, None, False
@@ -198,6 +207,7 @@ def run_state_machine(
                 in_trend = True
             reason = ""
             if i >= fill:
+                masked = bool(s[i] and in_trend)
                 if s[i] and not in_trend:
                     reason = "卖点"
                 elif trail and i > fill and c[i] <= pk * (1 - trail):
@@ -227,6 +237,8 @@ def run_state_machine(
         "why": why,
         "buy_date": None, "fill_date": None, "fill_px": None,
         "peak": None, "stop": None, "g1_seen": False,
+        "trail_hit": why == "回落",
+        "sell_masked_by_g1": masked,
     }
     open_trade = action in ("持有", "卖") or (action == "买")
     if open_trade and bi >= 0:
@@ -254,6 +266,137 @@ def run_state_machine(
     }
 
 
+def _num(row: pd.Series, col: str) -> float:
+    v = pd.to_numeric(row.get(col), errors="coerce")
+    return float(v) if pd.notna(v) else float("nan")
+
+
+def _flag(row: pd.Series, col: str) -> bool:
+    v = row.get(col)
+    return bool(v) if pd.notna(v) else False
+
+
+def indicator_snapshot(frame: pd.DataFrame, masks: dict[str, pd.Series], spec: RuleSpec,
+                       state: dict[str, Any]) -> dict[str, Any]:
+    """Last-bar readings and pass/fail for every rule component (no history stats)."""
+    row, prev = frame.iloc[-1], frame.iloc[-2] if len(frame) > 1 else frame.iloc[-1]
+    px = _num(row, "px")
+    near = DEFAULT_NEAR_PCT
+    lo9, hi9, hi8 = _num(row, "fig9_lower"), _num(row, "fig9_upper"), _num(row, "fig8_upper")
+    ma5, ma20 = _num(row, "ma5"), _num(row, "ma20")
+    gap5, gap20 = _num(row, "gap_5d"), _num(row, "gap_20d")
+    gap7, gap8 = _num(row, "fig7_gap"), _num(row, "fig8_gap")
+    pos9, pos10 = _num(row, "fig9_pos"), _num(row, "fig10_pos")
+    g7, g8, g9, g10 = (_num(row, f"fig{k}_g") for k in (7, 8, 9, 10))
+    vol5 = _num(row, "vol5_pct_120d")
+    tail = frame["px"].astype(float).iloc[-(FAST_LOOKBACK + FAST_RUN_BARS):]
+    run40 = (tail / tail.shift(FAST_RUN_BARS) - 1).iloc[-FAST_LOOKBACK:].max()
+    pos9_10 = pos9 - _num(frame.iloc[-11], "fig9_pos") if len(frame) > 10 else float("nan")
+
+    d: dict[str, Any] = {"px": px}
+    d["lo9"], d["dist_lo9"] = lo9, px / lo9 - 1
+    d["near_lo"] = bool(px <= lo9 * (1 + near))
+    d["near_lo_prev"] = bool(_num(prev, "px") <= _num(prev, "fig9_lower") * (1 + near))
+    d["near_lo_edge"] = d["near_lo"] and not d["near_lo_prev"]
+    d["ma5"], d["ma20"] = ma5, ma20
+    d["below_ma20"], d["ma5_below"] = bool(px < ma20), bool(ma5 < ma20)
+    d["gap5"], d["gap20"] = gap5, gap20
+    d["gap5_le0"], d["gap20_le0"] = bool(gap5 <= 0), bool(gap20 <= 0)
+    d["fig10_not_hi"] = not _flag(row, "fig10_touch_hi")
+    d["aux_buy"] = _flag(row, "aux_buy")
+    d["ae_buy"] = bool(masks["ae_buy"].iloc[-1])
+    d["gap7"], d["gap8"] = gap7, gap8
+    d["disc_ok"] = bool(gap7 <= B1_GAP or gap8 <= B1_GAP)
+    d["b1"] = bool(masks["b1"].iloc[-1])
+    d["run40"], d["fast"] = float(run40), bool(masks["fast"].iloc[-1])
+
+    d["hi9"], d["dist_hi9"] = hi9, px / hi9 - 1
+    d["near_hi"] = bool(px >= hi9 * (1 - near))
+    d["near_hi_edge"] = d["near_hi"] and not bool(_num(prev, "px") >= _num(prev, "fig9_upper") * (1 - near))
+    d["above_ma20"], d["ma5_above"] = bool(px > ma20), bool(ma5 > ma20)
+    d["gap5_ge0"], d["gap20_ge0"] = bool(gap5 >= 0), bool(gap20 >= 0)
+    d["aux_sell"] = _flag(row, "aux_sell")
+    d["sell_a"] = d["near_hi_edge"] and d["aux_sell"]
+    d["locmax"] = _flag(row, "locmax")
+    d["pos9"], d["pos9_ok"] = pos9, bool(pos9 >= DEFAULT_POS_MIN)
+    d["g9"], d["g9_pos"] = g9, bool(g9 > 0)
+    d["no_touch_hi"] = not (_flag(row, "fig9_touch_hi") or _flag(row, "fig10_touch_hi"))
+    d["vol5"], d["vol5_ok"] = vol5, bool(vol5 >= DEFAULT_VOL_CLUSTER)
+    d["prem7_ok"] = bool(gap7 >= DEFAULT_FIG7_PREM)
+    d["pos10"], d["pos10_ok"] = pos10, bool(pos10 >= DEFAULT_FIG10_POS_MIN)
+    d["prem_or_pos10"] = d["prem7_ok"] or d["pos10_ok"]
+    d["stretch"] = _flag(row, "fig9_mid_stretch_sell")
+    d["fig9_sell"] = bool(masks["ae_sell"].iloc[-1])
+    d["hi8"], d["dist_hi8"] = hi8, px / hi8 - 1
+    d["near_hi8"] = bool(px >= hi8 * (1 - near))
+    d["fig8_sell"] = bool(masks["fig8_sell"].iloc[-1])
+
+    d["g7"], d["g8"], d["g10"] = g7, g8, g10
+    d["g7_pos"], d["g8_pos"] = bool(g7 > 0), bool(g8 > 0)
+    d["pos9_10"], d["pos9_10_ok"] = pos9_10, bool(pos9_10 >= 0.30)
+    d["not_touch9hi"] = not _flag(row, "fig9_touch_hi")
+    d["g10_gt_g9"] = bool(g10 > g9)
+    d["g1"] = bool(masks["g1"].iloc[-1])
+
+    buy, sell = buy_sell_masks(masks, spec)
+    d["buy_signal"], d["sell_signal"] = bool(buy.iloc[-1]), bool(sell.iloc[-1])
+    d["trail_hit"] = bool(state.get("trail_hit"))
+    d["sell_masked_by_g1"] = bool(state.get("sell_masked_by_g1"))
+    stop = state.get("stop")
+    d["dist_stop"] = px / stop - 1 if stop else float("nan")
+    return d
+
+
+def flat_buy_quote(snap: dict[str, Any], spec: RuleSpec, *, applicable: bool = True) -> tuple[float | None, str]:
+    """Price that counts as touching fig9's lower rail, plus why it is or isn't a buy.
+
+    The price is ``fig9_lower × (1 + near)`` for this close only. It is filled for
+    every name, including names that are already long. It is not an intraday order.
+    """
+    try:
+        price = float(snap.get("lo9")) * (1.0 + DEFAULT_NEAR_PCT)
+    except (TypeError, ValueError):
+        price = float("nan")
+    if not np.isfinite(price):
+        return None, "无下轨"
+    if not applicable:
+        return price, "规则不适用"
+    if spec.fast_block and bool(snap.get("fast")):
+        return price, "快形态挡住"
+    if bool(snap.get("buy_signal")):
+        return price, "今天已是买点"
+    if spec.b1 and bool(snap.get("disc_ok")) and not bool(snap.get("near_lo")):
+        return price, "贴轨即可"
+    if not bool(snap.get("aux_buy")):
+        return price, "辅助买像未齐"
+    if bool(snap.get("near_lo")):
+        return price, "已在带内，明天同价不算"
+    return price, "还差这个价"
+
+
+TRIGGER_LABELS: dict[str, str] = {
+    "near_lo_edge": "近下轨上跳沿",
+    "aux_buy": "辅助买像",
+    "ae_buy": "aux_edge买点",
+    "b1": "B1",
+    "fast": "快形态",
+    "buy_signal": "买入信号",
+    "near_hi": "图9近上轨",
+    "aux_sell": "辅助卖像",
+    "sell_a": "卖点A",
+    "stretch": "带内拉伸B",
+    "near_hi8": "图8近上轨",
+    "sell_signal": "卖出信号",
+    "g1": "G1今日",
+    "trail_hit": "回落触发",
+    "sell_masked_by_g1": "卖点被G1屏蔽",
+}
+
+
+def triggered(snap: dict[str, Any]) -> list[str]:
+    return [label for key, label in TRIGGER_LABELS.items() if snap.get(key)]
+
+
 def evaluate(code: str, frame: pd.DataFrame, *, cost: float = 0.0005) -> dict[str, Any]:
     """Classify, build masks, run the state machine to the last bar."""
     frame = frame.copy()
@@ -265,5 +408,6 @@ def evaluate(code: str, frame: pd.DataFrame, *, cost: float = 0.0005) -> dict[st
     res = run_state_machine(frame["px"], buy, sell,
                             g1=masks["g1"] if spec.g1_hold else None,
                             trail=spec.trail, cost=cost)
+    snap = indicator_snapshot(frame, masks, spec, res["state"])
     return {"type": typ, "source": source, "spec": spec, "features": feat,
-            "masks": masks, "buy": buy, "sell": sell, **res}
+            "masks": masks, "buy": buy, "sell": sell, "snapshot": snap, **res}
