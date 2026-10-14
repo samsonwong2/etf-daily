@@ -1365,6 +1365,27 @@ def _oos_one_worker(code: str) -> tuple[str, dict | None, str | None]:
         return code, None, str(exc)
 
 
+def adaptive_page_exists(out_dir: Path, code: str, start: str, end: str) -> bool:
+    """True when a non-empty adaptive HTML already exists for this code and window."""
+    start_tag = pd.Timestamp(start).strftime("%Y%m%d")
+    end_tag = pd.Timestamp(end).strftime("%Y%m%d")
+    pattern = f"regime_transition_{str(code).upper()}_*_{start_tag}_{end_tag}_adaptive.html"
+    return any(path.is_file() and path.stat().st_size > 0 for path in out_dir.glob(pattern))
+
+
+def codes_to_render(
+    codes: list[str],
+    out_dir: Path,
+    start: str,
+    end: str,
+    force: bool,
+) -> list[str]:
+    """Codes that still need an OOS HTML pass. ``force`` redraws every code."""
+    if force:
+        return list(codes)
+    return [code for code in codes if not adaptive_page_exists(out_dir, code, start, end)]
+
+
 def _run_oos_batch(
     *,
     codes: list[str],
@@ -1612,10 +1633,15 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     # OOS
-    print("[oos] frozen execute + HTML")
+    force_redraw = bool(args.retrain) or args.live_snapshot is not None
+    render_codes = codes_to_render(codes, out_dir, start, end, force_redraw)
+    skipped = len(codes) - len(render_codes)
+    if skipped:
+        print(f"[oos] skip {skipped} codes with existing HTML for {start}→{end}")
+    print(f"[oos] frozen execute + HTML ({len(render_codes)}/{len(codes)})")
     try:
         rows, oos_errors = _run_oos_batch(
-            codes=codes,
+            codes=render_codes,
             jobs=int(args.jobs),
             ctx=oos_ctx,
             fail_fast=bool(args.fail_fast),

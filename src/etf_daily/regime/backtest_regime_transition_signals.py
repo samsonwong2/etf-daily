@@ -61,7 +61,6 @@ from etf_daily.lib.regime_transition_live_snapshot import (
     load_live_snapshot,
     snapshot_meta,
 )
-from etf_daily.pipeline.price_adjustments import auto_qfq_adjust_close_panel
 from etf_daily.pipeline.strategy_layer_audit import load_qlib_close
 from etf_daily.paths import CLUSTER_MAPPING_SELECTED_TXT, FUND_LIST_CSV, QLIB_PROVIDER_URI
 from etf_daily.lib.generate_daily_mu_position_report import load_fund_name_map
@@ -1324,6 +1323,26 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def day_already_scored(shard_csv: Path, signals_oos: Path, eval_end: str) -> bool:
+    """True when both files exist and their latest as_of is on or after eval_end."""
+    end = pd.Timestamp(eval_end)
+    if pd.isna(end):
+        return False
+    for path in (shard_csv, signals_oos):
+        if not path.is_file():
+            return False
+        try:
+            frame = pd.read_csv(path, usecols=["as_of"])
+        except (ValueError, pd.errors.EmptyDataError, OSError):
+            return False
+        if frame.empty or "as_of" not in frame.columns:
+            return False
+        dates = pd.to_datetime(frame["as_of"], errors="coerce").dropna()
+        if dates.empty or dates.max() < end:
+            return False
+    return True
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     pack_cfg = load_decision_pack_config()
@@ -1337,6 +1356,21 @@ def main(argv: list[str] | None = None) -> int:
     codes = [i.code for i in instruments]
     print(f"[INFO] cluster universe codes={len(codes)} path={cluster_path}")
 
+    resume = not bool(args.no_resume)
+    if resume and args.live_snapshot is None and args.eval_end:
+        out_dir = Path(args.output_dir).expanduser()
+        month = month_key(pd.Timestamp(args.eval_end))
+        if day_already_scored(
+            out_dir / "shards" / f"{month}.signals.csv",
+            out_dir / "signals_oos.csv",
+            args.eval_end,
+        ):
+            print(
+                f"[INFO] regime day already scored through {args.eval_end}; "
+                "skip qlib reload"
+            )
+            return 0
+
     uri = str(args.provider_uri or QLIB_PROVIDER_URI)
     # load enough history before eval_start
     start = (pd.Timestamp(args.eval_start) - pd.tseries.offsets.BDay(400)).strftime(
@@ -1344,7 +1378,6 @@ def main(argv: list[str] | None = None) -> int:
     )
     end = args.eval_end or pd.Timestamp("today").strftime("%Y-%m-%d")
     panel = load_qlib_close(uri, codes, start, end)
-    panel, _ = auto_qfq_adjust_close_panel(panel)
 
     live_meta: dict[str, Any] | None = None
     if args.live_snapshot is not None:

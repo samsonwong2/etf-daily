@@ -178,7 +178,8 @@ def _hrp(rest: list[str]) -> int:
     parser.add_argument("--asof-date", default=None)
     parser.add_argument("--lookback-days", type=int, default=252)
     parser.add_argument("--dist-t", type=float, default=None)
-    args = parser.parse_args(rest)
+    parser.add_argument("--min-corr", type=float, default=None)
+    args, unknown = parser.parse_known_args(rest)
     if args.as_of and args.asof_date and args.as_of != args.asof_date:
         parser.error("--as-of and --asof-date differ")
     asof_date = args.as_of or args.asof_date or date.today().isoformat()
@@ -188,7 +189,7 @@ def _hrp(rest: list[str]) -> int:
         cut = f"_d{int(round(args.dist_t * 100)):03d}"
     out_root = _config_value(
         "HRP_OUTPUT_DIR",
-        str(Path.home() / "etf-daily-output" / "decision_packs"),
+        str(Path.home() / "temp" / "decision_packs"),
     )
     output = Path(out_root).expanduser() / tag / f"hrp_dendrogram_{tag}{cut}.html"
     argv = [
@@ -201,6 +202,9 @@ def _hrp(rest: list[str]) -> int:
     ]
     if args.dist_t is not None:
         argv.extend(["--dist-t", str(args.dist_t)])
+    if args.min_corr is not None:
+        argv.extend(["--min-corr", str(args.min_corr)])
+    argv.extend(unknown)
     from etf_daily.hrp.dendrogram import main as hrp_main
 
     result = hrp_main(argv)
@@ -231,13 +235,27 @@ def _as_of_from_listing(path: Path) -> str | None:
 def _resolve_listing(raw: str) -> Path:
     path = Path(raw).expanduser()
     if path.is_dir():
-        return path
+        return path.resolve()
     root = _config_value("PLOTLY_ROOT")
+    candidate = Path(root).expanduser() / path.name if root else None
+    if candidate is not None and candidate.is_dir():
+        print(f"[INFO] listing-dir {path} -> {candidate}")
+        return candidate.resolve()
+    tried = [str(path)]
+    if candidate is not None and str(candidate) not in tried:
+        tried.append(str(candidate))
+    hint = ""
     if root:
-        candidate = Path(root).expanduser() / path.name
-        if candidate.is_dir():
-            return candidate
-    return path
+        siblings = sorted(Path(root).expanduser().glob("*_from_listing"))
+        if siblings:
+            hint = f" Latest on disk: {siblings[-1]}"
+    raise SystemExit(
+        "listing directory not found: "
+        + " ; ".join(tried)
+        + "."
+        + hint
+        + " Export PLOTLY_ROOT or pass an existing --listing-dir."
+    )
 
 
 def _triggers(rest: list[str]) -> int:

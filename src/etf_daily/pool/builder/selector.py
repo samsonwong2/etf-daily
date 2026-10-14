@@ -19,11 +19,19 @@ from .clustering import (
     cluster_and_select,
     pairwise_overlap_matrices,
     prepare_recent_window,
+    subset_pairwise,
     summarize_overlap_counts,
 )
 from .code_utils import build_normalized_code_set, code_in_normalized_set, load_manual_keep_codes
 from .config import load_shared_config, write_json
-from .data_loading import build_code_name_map, load_data, load_fund_list_universe
+from .data_loading import (
+    build_code_name_map,
+    filter_stockpool,
+    load_data,
+    load_fund_list_universe,
+    panel_has_codes,
+    slice_loaded_codes,
+)
 from .dendrogram import plot_selected_dendrogram
 from .export import export_mapping
 
@@ -31,11 +39,33 @@ from .export import export_mapping
 _SEED_CODE_PATTERN = re.compile(r"^(?:SH|SZ)?\d{6}$", re.IGNORECASE)
 
 
+def _pair_matrices(
+    returns: pd.DataFrame,
+    codes: list[str],
+    precomputed_corr: pd.DataFrame | None,
+    precomputed_overlap: pd.DataFrame | None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Reuse a superset corr/overlap when every code is already in it."""
+    if (
+        precomputed_corr is not None
+        and precomputed_overlap is not None
+        and panel_has_codes(precomputed_corr.index, codes)
+        and panel_has_codes(precomputed_corr.columns, codes)
+        and panel_has_codes(precomputed_overlap.index, codes)
+        and panel_has_codes(precomputed_overlap.columns, codes)
+    ):
+        return subset_pairwise(precomputed_corr, precomputed_overlap, codes)
+    corr, overlap, _ = pairwise_overlap_matrices(returns, C.MIN_PAIR_OVERLAP_DAYS, C.LOW_OVERLAP_DISTANCE)
+    return corr, overlap
+
+
 def _resolve_current_cluster_drop_codes(
     close: pd.DataFrame,
     vol: pd.DataFrame | None,
     cluster_seed_codes: list[str] | tuple[str, ...] | None,
     linkage_method: str = "ward",
+    precomputed_corr: pd.DataFrame | None = None,
+    precomputed_overlap: pd.DataFrame | None = None,
 ) -> set[str]:
     """Resolve cluster-seed exclusions from the current run's own clustering universe.
 
@@ -59,7 +89,7 @@ def _resolve_current_cluster_drop_codes(
 
     returns = returns[eligible_codes]
     cluster_vol = recent_vol[eligible_codes] if recent_vol is not None else None
-    corr, overlap, _ = pairwise_overlap_matrices(returns, C.MIN_PAIR_OVERLAP_DAYS, C.LOW_OVERLAP_DISTANCE)
+    corr, overlap = _pair_matrices(returns, eligible_codes, precomputed_corr, precomputed_overlap)
     _, clusters, _, _, _ = cluster_and_select(
         returns,
         cluster_vol,
@@ -101,6 +131,9 @@ def _resolve_current_cluster_drop_codes(
 def _build_diagnostic_view(
     close: pd.DataFrame,
     vol: pd.DataFrame | None,
+    *,
+    precomputed_corr: pd.DataFrame | None = None,
+    precomputed_overlap: pd.DataFrame | None = None,
 ) -> dict[str, object]:
     """Build row-level diagnostics and clustering inputs for a given universe."""
     _, recent_vol, returns_raw = prepare_recent_window(close, vol, C.CLUSTER_LOOKBACK_DAYS)
@@ -137,7 +170,7 @@ def _build_diagnostic_view(
 
     returns = returns_raw[eligible_codes]
     cluster_vol = recent_vol[eligible_codes] if recent_vol is not None else None
-    corr, overlap, _ = pairwise_overlap_matrices(returns, C.MIN_PAIR_OVERLAP_DAYS, C.LOW_OVERLAP_DISTANCE)
+    corr, overlap = _pair_matrices(returns, eligible_codes, precomputed_corr, precomputed_overlap)
     overlap_summary = summarize_overlap_counts(overlap)
     diagnostics_df = diagnostics_df.merge(overlap_summary, on="code", how="left")
     diagnostics_df[overlap_columns] = diagnostics_df[overlap_columns].fillna(0)
@@ -211,18 +244,34 @@ def select_pool(
         force_keep_codes=force_keep_codes,
     )
 
-    close, vol = load_data(
-        selected_codes,
-        provider_uri=provider_uri,
-        test_period=test_period,
-        excluded_codes=excluded_codes.union(effective_manual_excludes),
-    )
+    filtered_excludes = excluded_codes.union(effective_manual_excludes)
+    requested_codes = filter_stockpool(selected_codes, filtered_excludes)
+    first_requested = filter_stockpool(full_universe_codes, full_universe_excluded_codes)
+    sliced_codes = slice_loaded_codes(full_close.columns, requested_codes, first_requested)
+    precomputed_corr = full_diag_view["corr"] if isinstance(full_diag_view["corr"], pd.DataFrame) else None
+    precomputed_overlap = full_diag_view["overlap"] if isinstance(full_diag_view["overlap"], pd.DataFrame) else None
+    if sliced_codes is not None:
+        print(f"[INFO] Reusing full qlib panel, slicing {len(sliced_codes)} codes")
+        close = full_close.loc[:, sliced_codes].copy()
+        vol = full_vol.loc[:, sliced_codes].copy() if full_vol is not None else None
+    else:
+        print("[INFO] Filtered universe is not a subset of the full load; reading qlib again")
+        close, vol = load_data(
+            selected_codes,
+            provider_uri=provider_uri,
+            test_period=test_period,
+            excluded_codes=filtered_excludes,
+        )
+        precomputed_corr = None
+        precomputed_overlap = None
     loaded_codes_before_cluster_drop = set(close.columns.tolist())
 
     current_cluster_drop_codes = _resolve_current_cluster_drop_codes(
         close,
         vol,
         C.ALWAYS_DROP_CLUSTER_CODES,
+        precomputed_corr=precomputed_corr,
+        precomputed_overlap=precomputed_overlap,
     )
     if current_cluster_drop_codes:
         normalized_cluster_drops = build_normalized_code_set(current_cluster_drop_codes)
@@ -267,7 +316,12 @@ def select_pool(
         if reasons:
             diagnostics_reason_map[code] = "|".join(dict.fromkeys(reasons))
 
-    diag_view = _build_diagnostic_view(close, vol)
+    diag_view = _build_diagnostic_view(
+        close,
+        vol,
+        precomputed_corr=precomputed_corr,
+        precomputed_overlap=precomputed_overlap,
+    )
     diagnostics_df = diag_view["diagnostics_df"]
     eligible_codes = diag_view["eligible_codes"]
     if not eligible_codes:

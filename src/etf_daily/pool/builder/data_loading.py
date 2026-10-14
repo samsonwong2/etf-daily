@@ -30,6 +30,68 @@ from .code_utils import (
 )
 
 
+_QLIB_PROVIDER_URI: str | None = None
+
+
+def should_reinit_qlib(active_uri: str | None, provider_uri: str) -> bool:
+    """True when this process has not yet initialized qlib on ``provider_uri``."""
+    return (active_uri or "") != str(provider_uri)
+
+
+def panel_has_codes(loaded_columns: Iterable[str], requested: Iterable[str]) -> bool:
+    """True when every non-empty requested code is already a loaded column."""
+    loaded = {str(col) for col in loaded_columns}
+    requested_codes = [str(code).strip() for code in requested if str(code).strip()]
+    return all(code in loaded for code in requested_codes)
+
+
+def filter_stockpool(
+    instruments: Iterable[str],
+    excluded_codes: Iterable[str] | None = None,
+) -> list[str]:
+    """Same instrument filter ``load_data`` applies before ``D.features``."""
+    stockpool = [str(code).strip() for code in instruments if str(code).strip()]
+    if excluded_codes:
+        normalized_excluded = build_normalized_code_set(excluded_codes)
+        stockpool = [code for code in stockpool if not code_in_normalized_set(code, normalized_excluded)]
+    return stockpool
+
+
+def slice_loaded_codes(
+    loaded_columns: Iterable[str],
+    requested: Iterable[str],
+    first_requested: Iterable[str],
+) -> list[str] | None:
+    """Columns to reuse from an already loaded panel, in loaded order.
+
+    Returns None when a requested code was never part of the first request, so a
+    second qlib read might still find it. Codes that were requested the first
+    time but missing from the panel were omitted by qlib and stay omitted.
+    """
+    loaded_list = [str(col) for col in loaded_columns]
+    loaded = set(loaded_list)
+    first = {str(code).strip() for code in first_requested if str(code).strip()}
+    req = [str(code).strip() for code in requested if str(code).strip()]
+    for code in req:
+        if code not in loaded and code not in first:
+            return None
+    requested_set = set(req)
+    return [col for col in loaded_list if col in requested_set]
+
+
+def _ensure_qlib(provider_uri: str) -> None:
+    """Initialize qlib once per provider URI in this process."""
+    global _QLIB_PROVIDER_URI
+    if qlib is None or D is None:
+        raise RuntimeError("qlib is not available; cannot load data.")
+    if not should_reinit_qlib(_QLIB_PROVIDER_URI, provider_uri):
+        print("Reusing qlib provider:", provider_uri)
+        return
+    print("Initializing qlib provider:", provider_uri)
+    qlib.init(provider_uri=provider_uri, region=REG_CN)
+    _QLIB_PROVIDER_URI = str(provider_uri)
+
+
 POSSIBLE_TYPE_NAMES = ["基金类型", "类型", "fund_type", "type"]
 POSSIBLE_INCEPTION_NAMES = ["成立日期", "inception_date", "上市日期", "成立时间"]
 POSSIBLE_CODE_NAMES = ["代码", "code", "fund_code", "基金代码", "证券代码", "代码ID"]
@@ -85,38 +147,12 @@ def load_fund_list_universe(csv_path: str) -> tuple[pd.DataFrame, dict[str, str]
     return universe, code_name_map
 
 
-def load_data(
-    instruments: Iterable[str],
-    provider_uri: str,
-    test_period: tuple[str, str],
-    excluded_codes: Iterable[str] | None = None,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Pull ``$close`` and ``$volume`` from qlib for ``instruments``.
-
-    Mirrors ``2_filter/0.2_cluster_select_from_dendrogram.py::load_data``.
-    """
-    if qlib is None or D is None:
-        raise RuntimeError("qlib is not available; cannot load data.")
-    print("Initializing qlib provider:", provider_uri)
-    qlib.init(provider_uri=provider_uri, region=REG_CN)
-    stockpool = [str(code).strip() for code in instruments if str(code).strip()]
-    if excluded_codes:
-        normalized_excluded = build_normalized_code_set(excluded_codes)
-        stockpool = [code for code in stockpool if not code_in_normalized_set(code, normalized_excluded)]
-    raw = D.features(
-        stockpool,
-        fields=["$close", "$volume"],
-        start_time=test_period[0],
-        end_time=test_period[1],
-    )
+def _panels_from_features(raw: pd.DataFrame, excluded_codes: Iterable[str] | None) -> tuple[pd.DataFrame, pd.DataFrame]:
     close = raw["$close"].unstack(level="instrument")
     vol = raw["$volume"].unstack(level="instrument")
     close.index.name = "Date"
     vol.index.name = "Date"
     close = close.sort_index().ffill()
-    close, qfq_records = auto_qfq_adjust_close_panel(close)
-    if not qfq_records.empty:
-        log_qfq_adjustments(qfq_records, stage="pool_builder.load_close_volume_from_qlib")
     vol = vol.sort_index()
     if excluded_codes:
         normalized_excluded = build_normalized_code_set(excluded_codes)
@@ -126,6 +162,50 @@ def load_data(
             print(f"Removed {len(dropped)} codes due to exclude-types rule.")
             close = close[keep_cols]
             vol = vol[keep_cols]
+    return close, vol
+
+
+def load_raw_close_volume(
+    instruments: Iterable[str],
+    provider_uri: str,
+    test_period: tuple[str, str],
+    excluded_codes: Iterable[str] | None = None,
+    end_date: str | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Pull unadjusted ``$close`` and ``$volume``. ``end_date`` overrides ``test_period[1]``."""
+    _ensure_qlib(provider_uri)
+    stockpool = filter_stockpool(instruments, excluded_codes)
+    raw = D.features(
+        stockpool,
+        fields=["$close", "$volume"],
+        start_time=test_period[0],
+        end_time=end_date or test_period[1],
+    )
+    close, vol = _panels_from_features(raw, excluded_codes)
+    print("Loaded raw close shape", close.shape, "volume shape", vol.shape)
+    return close, vol
+
+
+def load_data(
+    instruments: Iterable[str],
+    provider_uri: str,
+    test_period: tuple[str, str],
+    excluded_codes: Iterable[str] | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Pull ``$close`` and ``$volume`` from qlib for ``instruments``.
+
+    Mirrors ``2_filter/0.2_cluster_select_from_dendrogram.py::load_data``.
+    Qfq is applied to the requested ``test_period`` only.
+    """
+    close, vol = load_raw_close_volume(
+        instruments,
+        provider_uri=provider_uri,
+        test_period=test_period,
+        excluded_codes=excluded_codes,
+    )
+    close, qfq_records = auto_qfq_adjust_close_panel(close)
+    if not qfq_records.empty:
+        log_qfq_adjustments(qfq_records, stage="pool_builder.load_close_volume_from_qlib")
     print("Loaded close shape", close.shape, "volume shape", vol.shape)
     return close, vol
 

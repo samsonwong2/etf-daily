@@ -441,6 +441,16 @@ def pairwise_overlap_matrices(
     return corr, overlap, dist
 
 
+def subset_pairwise(
+    corr: pd.DataFrame,
+    overlap: pd.DataFrame,
+    codes: Iterable[str],
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Slice precomputed pair matrices. Pairwise corr/overlap do not depend on other columns."""
+    ordered = [code for code in codes if code in corr.index and code in corr.columns and code in overlap.index and code in overlap.columns]
+    return corr.loc[ordered, ordered].copy(), overlap.loc[ordered, ordered].copy()
+
+
 def summarize_overlap_counts(overlap: pd.DataFrame) -> pd.DataFrame:
     rows = []
     for code in overlap.index:

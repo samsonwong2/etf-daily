@@ -96,8 +96,48 @@ def _make_cluster_module_shim(shared_config_path: str | None = None) -> SimpleNa
         # callables
         build_code_name_map=_build_code_name_map_shim,
         load_data=_load_data_shim,
+        PROVIDER_URI=provider_uri,
     )
     return shim
+
+
+def clip_to_end(close: pd.DataFrame, build_end: str) -> pd.DataFrame:
+    """Drop rows after ``build_end``. Later bars must not enter build-window returns."""
+    end_ts = pd.Timestamp(build_end)
+    return close.loc[pd.to_datetime(close.index) <= end_ts].copy()
+
+
+def qfq_window(
+    close: pd.DataFrame,
+    start: str,
+    end: str,
+    codes: List[str] | None = None,
+) -> pd.DataFrame:
+    """Qfq a date slice by itself. Jumps outside the slice do not rescale these bars."""
+    start_ts = pd.Timestamp(start)
+    end_ts = pd.Timestamp(end)
+    idx = pd.to_datetime(close.index)
+    sliced = close.loc[(idx >= start_ts) & (idx <= end_ts)].copy()
+    if codes is not None:
+        keep = [code for code in codes if code in sliced.columns]
+        sliced = sliced.loc[:, keep]
+    sliced = sliced.sort_index().ffill().bfill()
+    return _qfq_adjust_close(sliced, stage="pool_builder.qfq_window")
+
+
+def window_bounds(build_end: str, future_end: str, windows: List[int]) -> tuple[str, str]:
+    """Review start (business days) and audit start (calendar days)."""
+    max_window = max(windows) if windows else 20
+    review_start = (pd.Timestamp(future_end) - pd.tseries.offsets.BDay(max_window + 40)).strftime("%Y-%m-%d")
+    audit_start = (pd.Timestamp(build_end) - pd.Timedelta(days=40)).strftime("%Y-%m-%d")
+    return review_start, audit_start
+
+
+def _raw_close_covers(raw_close: pd.DataFrame, start_date: str, end_date: str) -> bool:
+    if raw_close is None or raw_close.empty:
+        return False
+    idx = pd.to_datetime(raw_close.index)
+    return bool(idx.min() <= pd.Timestamp(start_date) and idx.max() >= pd.Timestamp(end_date))
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -176,19 +216,38 @@ def load_cluster_data(cluster_module, selected_codes: List[str], excluded_codes)
     return cluster_module.load_data(selected_codes, excluded_union)
 
 
-def build_runtime_state(cluster_module, mapping_csv: str):
+def build_runtime_state(cluster_module, mapping_csv: str, future_end: str | None = None):
     if getattr(cluster_module, "qlib", None) is None:
         raise RuntimeError("qlib is unavailable in the current environment")
 
     mapping_df = load_mapping_csv(mapping_csv)
     code_map, excluded_codes, selected_codes = build_code_map_state(cluster_module, mapping_df)
-    close, volume_df = load_cluster_data(cluster_module, selected_codes, excluded_codes)
+    build_end = cluster_module.TEST_PERIOD[1]
+    raw_close = None
+    extend = future_end is not None and pd.Timestamp(future_end) > pd.Timestamp(build_end)
+    if extend:
+        excluded_union = excluded_codes.union(cluster_module.ALWAYS_DROP_CODES)
+        close, volume_df = _dl.load_raw_close_volume(
+            selected_codes,
+            provider_uri=cluster_module.PROVIDER_URI,
+            test_period=tuple(cluster_module.TEST_PERIOD),
+            excluded_codes=excluded_union,
+            end_date=str(future_end)[:10],
+        )
+        raw_close = close.copy()
+        close = _qfq_adjust_close(clip_to_end(close, build_end), stage="pool_builder.build_runtime_state")
+        volume_df = clip_to_end(volume_df, build_end)
+    else:
+        close, volume_df = load_cluster_data(cluster_module, selected_codes, excluded_codes)
     keep_codes = [code for code in mapping_df["code"].tolist() if code in close.columns]
     if not keep_codes:
         raise RuntimeError("No mapping codes were matched in loaded qlib data")
     mapping_df = mapping_df[mapping_df["code"].isin(keep_codes)].copy()
     close = close[keep_codes]
     volume_df = volume_df[keep_codes]
+    if raw_close is not None:
+        raw_keep = [code for code in keep_codes if code in raw_close.columns]
+        raw_close = raw_close[raw_keep]
     returns = close.pct_change().dropna(how="all")
     returns = returns.replace([np.inf, -np.inf], np.nan).fillna(0)
     name_map = dict(zip(mapping_df["code"], mapping_df["name"].fillna("")))
@@ -207,6 +266,7 @@ def build_runtime_state(cluster_module, mapping_csv: str):
         "returns": returns,
         "final_selected": list(dict.fromkeys(final_selected)),
         "final_reasons": final_reasons,
+        "raw_close": raw_close,
     }
 
 
@@ -349,7 +409,16 @@ def build_review_metrics_from_local_qlib(
     return filtered_mapping, future_df, build_metrics, returns
 
 
-def fetch_close_prices(cluster_module, codes: List[str], start_date: str, end_date: str) -> pd.DataFrame:
+def fetch_close_prices(
+    cluster_module,
+    codes: List[str],
+    start_date: str,
+    end_date: str,
+    raw_close: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    if raw_close is not None and _raw_close_covers(raw_close, start_date, end_date):
+        print(f"[INFO] Reusing raw close for {start_date}..{end_date}")
+        return qfq_window(raw_close, start_date, end_date, codes)
     raw = cluster_module.D.features(
         codes,
         fields=["$close"],
@@ -595,12 +664,13 @@ def build_audit_table(cluster_module, state, future_end: str, windows: List[int]
     member_map = build_cluster_member_map(mapping_df)
     final_by_cluster = build_selected_by_cluster(mapping_df)
     build_metric_df, corr = build_build_window_metrics(returns, volume_df, member_map)
-    future_start = (pd.Timestamp(cluster_module.TEST_PERIOD[1]) - pd.Timedelta(days=40)).strftime("%Y-%m-%d")
+    _, future_start = window_bounds(cluster_module.TEST_PERIOD[1], future_end, windows)
     future_close = fetch_close_prices(
         cluster_module,
         mapping_df["code"].tolist(),
         future_start,
         future_end,
+        raw_close=state.get("raw_close"),
     )
     future_metric_df = compute_forward_metrics(future_close, cluster_module.TEST_PERIOD[1], windows)
 
@@ -732,7 +802,7 @@ def main():
     args = parse_args()
     windows = parse_windows(args.windows)
     cluster_module = _make_cluster_module_shim(args.shared_config)
-    state = build_runtime_state(cluster_module, args.mapping_csv)
+    state = build_runtime_state(cluster_module, args.mapping_csv, future_end=args.future_end)
     audit_df = build_audit_table(
         cluster_module,
         state,

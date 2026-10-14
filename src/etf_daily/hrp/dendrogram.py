@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import argparse
 import html
+import json
+import re
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -16,6 +18,7 @@ from typing import Iterable
 
 import numpy as np
 import pandas as pd
+from scipy.cluster.hierarchy import dendrogram as scipy_dendrogram
 from scipy.cluster.hierarchy import fcluster, linkage
 from scipy.spatial.distance import squareform
 from skfolio import RiskMeasure
@@ -118,12 +121,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=float,
         default=MIN_REP_MOVE_PCT,
         help=(
-            "方向组出代表的最小 |区间涨跌%%|（默认 5.0；0=关闭门槛，每组都出代表）"
+            "方向组出极端动量代表的最小 |区间涨跌%%|（默认 5.0；0=关闭门槛）"
+        ),
+    )
+    parser.add_argument(
+        "--min-corr",
+        type=float,
+        default=DEFAULT_MIN_CORR,
+        help=(
+            "簇内最小两两相关硬门槛（默认 0.55）；低于则拆成连通分量。"
+            "设为 0 关闭拆分。"
         ),
     )
     args = parser.parse_args(argv)
     if not (0.0 < args.dist_t < 2.0):
         parser.error("--dist-t 需在 (0, 2) 范围内（1-corr 距离合法范围）")
+    if args.min_corr < 0.0 or args.min_corr >= 1.0:
+        parser.error("--min-corr 需在 [0, 1) 范围内（0=关闭）")
     return args
 
 
@@ -238,8 +252,204 @@ def prepare_returns(close: pd.DataFrame, requested_codes: Iterable[str]) -> tupl
     return returns, used, dropped
 
 
-# 组内最大 |retN| 低于该阈值 → 该方向组标「无明确方向」，不出代表。
+# 组内最大 |retN| 低于该阈值 → 该方向组标「无明确方向」，不出极端动量代表。
 MIN_REP_MOVE_PCT = 5.0
+# 簇内两两相关低于此阈值则拆簇（0=关闭）。
+DEFAULT_MIN_CORR = 0.55
+DOMAIN_BOND = "bond"
+DOMAIN_OVERSEAS = "overseas"
+DOMAIN_DOMESTIC = "domestic"
+DOMAIN_ORDER = (DOMAIN_BOND, DOMAIN_OVERSEAS, DOMAIN_DOMESTIC)
+
+_OVERSEAS_NAME_RE = re.compile(
+    r"纳指|标普|道琼斯|日经|德国|法国|巴西|沙特|东南亚|"
+    r"美国|QDII|标普油气|道指"
+)
+
+
+def classify_cluster_domain(code: str, name: str) -> str:
+    """Map an ETF to bond / overseas / domestic for domain-first clustering."""
+    from etf_daily.scripts.backtest_fig12_six_states_pool import is_bond
+
+    code_u = normalize_code(code)
+    name_s = name or ""
+    if is_bond(code_u, name_s):
+        return DOMAIN_BOND
+    # 港股通 / 恒生 / 中概 stay domestic even if they trade offshore listings
+    if re.search(r"港股通|恒生|恒指|中概", name_s) and not re.search(
+        r"纳指|标普|道琼斯|日经|德国|法国|巴西|沙特|东南亚|美国|QDII", name_s
+    ):
+        return DOMAIN_DOMESTIC
+    if _OVERSEAS_NAME_RE.search(name_s) or "QDII" in name_s.upper():
+        return DOMAIN_OVERSEAS
+    return DOMAIN_DOMESTIC
+
+
+def _aligned_corr(returns: pd.DataFrame, corr: pd.DataFrame | None) -> pd.DataFrame:
+    """Use ``corr`` when it covers every return column; otherwise compute it."""
+    cols = list(returns.columns)
+    if corr is not None and all(col in corr.index and col in corr.columns for col in cols):
+        return corr.loc[cols, cols]
+    return returns.corr()
+
+
+def ward_labels(
+    returns: pd.DataFrame,
+    *,
+    dist_t: float = DIST_T,
+    n_clusters: int | None = None,
+    corr: pd.DataFrame | None = None,
+) -> pd.Series:
+    """Ward(1-corr) cluster labels for columns of ``returns``."""
+    codes = list(returns.columns)
+    if len(codes) == 0:
+        return pd.Series(dtype=int)
+    if len(codes) == 1:
+        return pd.Series([1], index=codes, dtype=int)
+    corr = _aligned_corr(returns, corr)
+    dist = (1.0 - corr).clip(lower=0.0).fillna(1.0)
+    np.fill_diagonal(dist.values, 0.0)
+    condensed = squareform(dist.values, checks=False)
+    z = linkage(condensed, method="ward")
+    if n_clusters is not None and int(n_clusters) >= 2:
+        labels = fcluster(z, t=min(int(n_clusters), len(codes)), criterion="maxclust")
+    else:
+        labels = fcluster(z, t=float(dist_t), criterion="distance")
+    return pd.Series(labels, index=codes, name="cluster", dtype=int)
+
+
+def split_by_min_corr(
+    labels: pd.Series,
+    corr: pd.DataFrame,
+    *,
+    min_corr: float = DEFAULT_MIN_CORR,
+) -> pd.Series:
+    """Split clusters whose min pairwise corr is below ``min_corr``.
+
+    Within a weak cluster, keep connected components where an edge exists when
+    pairwise corr >= ``min_corr``; isolated names become singleton clusters.
+    ``min_corr <= 0`` disables splitting.
+    """
+    if float(min_corr) <= 0 or labels.empty:
+        return labels.astype(int)
+
+    out = labels.copy().astype(int)
+    next_id = int(out.max()) + 1 if len(out) else 1
+    for cid, members in labels.groupby(labels).groups.items():
+        ms = [str(m) for m in members]
+        if len(ms) < 2:
+            continue
+        sub = corr.reindex(index=ms, columns=ms)
+        vals = []
+        for i, a in enumerate(ms):
+            for b in ms[i + 1 :]:
+                v = sub.loc[a, b]
+                if pd.notna(v):
+                    vals.append(float(v))
+        if not vals or min(vals) >= float(min_corr):
+            continue
+        # Union-find / BFS components on corr >= min_corr
+        adj: dict[str, list[str]] = {c: [] for c in ms}
+        for i, a in enumerate(ms):
+            for b in ms[i + 1 :]:
+                v = sub.loc[a, b]
+                if pd.notna(v) and float(v) >= float(min_corr):
+                    adj[a].append(b)
+                    adj[b].append(a)
+        seen: set[str] = set()
+        components: list[list[str]] = []
+        for c in ms:
+            if c in seen:
+                continue
+            stack = [c]
+            seen.add(c)
+            comp = [c]
+            while stack:
+                u = stack.pop()
+                for v in adj[u]:
+                    if v not in seen:
+                        seen.add(v)
+                        stack.append(v)
+                        comp.append(v)
+            components.append(comp)
+        if len(components) <= 1:
+            # Fully disconnected below threshold → each name its own cluster
+            # except we already have components of size 1 each
+            pass
+        # First component keeps original cid; rest get new ids
+        for i, comp in enumerate(components):
+            new_cid = int(cid) if i == 0 else next_id
+            if i > 0:
+                next_id += 1
+            for code in comp:
+                out.loc[code] = new_cid
+    return out.astype(int)
+
+
+def corr_medoid(members: list[str], corr: pd.DataFrame) -> str:
+    """Code with highest mean correlation to other members (self excluded)."""
+    ms = [str(m) for m in members]
+    if len(ms) == 1:
+        return ms[0]
+    sub = corr.reindex(index=ms, columns=ms)
+    best_code = ms[0]
+    best_score = -np.inf
+    for c in ms:
+        others = [x for x in ms if x != c]
+        score = float(pd.to_numeric(sub.loc[c, others], errors="coerce").mean())
+        if np.isnan(score):
+            score = -np.inf
+        if score > best_score:
+            best_score = score
+            best_code = c
+    return best_code
+
+
+def domain_ward_labels(
+    returns: pd.DataFrame,
+    name_map: dict[str, str],
+    *,
+    dist_t: float = DIST_T,
+    n_clusters: int | None = None,
+    min_corr: float = DEFAULT_MIN_CORR,
+    corr: pd.DataFrame | None = None,
+) -> tuple[pd.Series, pd.Series, pd.DataFrame]:
+    """Domain-first Ward labels + min-corr split.
+
+    Returns ``(labels, domains, corr)`` with globally renumbered cluster ids.
+    When ``n_clusters`` is set, it is applied only inside the domestic domain
+    (largest); bond/overseas still use ``dist_t``.
+    """
+    codes = [str(c) for c in returns.columns]
+    corr = _aligned_corr(returns, corr)
+    domains = pd.Series(
+        {c: classify_cluster_domain(c, name_map.get(c, c)) for c in codes},
+        name="domain",
+    )
+    pieces: list[pd.Series] = []
+    next_id = 1
+    for domain in DOMAIN_ORDER:
+        members = [c for c in codes if domains[c] == domain]
+        if not members:
+            continue
+        sub = returns[members]
+        # n_clusters only for domestic when forcing maxclust
+        n_c = n_clusters if domain == DOMAIN_DOMESTIC else None
+        lab = ward_labels(sub, dist_t=dist_t, n_clusters=n_c, corr=corr.loc[members, members])
+        lab = split_by_min_corr(lab, corr, min_corr=min_corr)
+        # renumber contiguous from next_id
+        mapping: dict[int, int] = {}
+        for old in sorted(lab.unique()):
+            mapping[int(old)] = next_id
+            next_id += 1
+        lab = lab.map(lambda x, m=mapping: m[int(x)]).astype(int)
+        pieces.append(lab)
+    if not pieces:
+        empty = pd.Series(dtype=int, name="cluster")
+        return empty, domains, corr
+    labels = pd.concat(pieces).reindex(codes).astype(int)
+    labels.name = "cluster"
+    return labels, domains, corr
 
 
 def compute_cluster_representatives(
@@ -251,29 +461,27 @@ def compute_cluster_representatives(
     rep_window: int = 20,
     min_rep_move: float = MIN_REP_MOVE_PCT,
     dist_t: float = DIST_T,
+    min_corr: float = DEFAULT_MIN_CORR,
+    labels: pd.Series | None = None,
+    corr: pd.DataFrame | None = None,
+    domains: pd.Series | None = None,
 ) -> pd.DataFrame:
-    """Cluster codes by (1 - corr) Ward linkage; pick max |retN| per direction group.
+    """Domain-first Ward clusters; medoid representative + extreme movers.
 
-    Distance/linkage matches fund_pool_builder production (ward); the cutting
-    threshold defaults to production ``DIST_T`` and can be overridden via
-    ``dist_t`` (ignored when ``n_clusters`` forces maxclust).
-    Each cluster is split into up/down groups by the sign of the cumulative
-    move over the last ``rep_window`` trading days; each group gets its own
-    representative (max |retN|). Groups whose max |retN| is below
-    ``min_rep_move`` are marked ``no_direction`` and yield no representative.
-    Returns one row per member with an ``is_representative`` flag.
+    * ``is_representative``: correlation medoid of the whole cluster (one per cluster).
+    * ``is_extreme_mover``: max |retN| within each up/down group when |move| >= min_rep_move.
     """
-    codes = list(returns.columns)
-    corr = returns.corr()
-    dist = (1.0 - corr).clip(lower=0.0).fillna(1.0)
-    np.fill_diagonal(dist.values, 0.0)
-    condensed = squareform(dist.values, checks=False)
-    z = linkage(condensed, method="ward")
-    if n_clusters is not None and int(n_clusters) >= 2:
-        labels = fcluster(z, t=int(n_clusters), criterion="maxclust")
-    else:
-        labels = fcluster(z, t=float(dist_t), criterion="distance")
-    clusters = pd.Series(labels, index=codes, name="cluster")
+    if labels is None or corr is None or domains is None:
+        labels, domains, corr = domain_ward_labels(
+            returns,
+            name_map,
+            dist_t=dist_t,
+            n_clusters=n_clusters,
+            min_corr=min_corr,
+            corr=corr,
+        )
+    if labels.empty:
+        return pd.DataFrame()
 
     px = close.copy()
     px.columns = [normalize_code(col) for col in px.columns]
@@ -281,12 +489,16 @@ def compute_cluster_representatives(
     base = px.iloc[-(w + 1)] if len(px) > w else px.iloc[0]
     ret_n = (px.iloc[-1] / base - 1.0) * 100.0
 
+    medoids: dict[int, str] = {}
+    for cid, members in labels.groupby(labels).groups.items():
+        medoids[int(cid)] = corr_medoid([str(m) for m in members], corr)
+
     records: list[dict[str, object]] = []
-    for cid, members in clusters.groupby(clusters).groups.items():
-        members = [str(m) for m in members]
+    for cid, members_idx in labels.groupby(labels).groups.items():
+        members = [str(m) for m in members_idx]
         r_n = ret_n.reindex(members).astype(float)
-        # Split cluster into up/down groups by sign of the window move.
-        # 0/NaN joins the side with the larger |move| (default up).
+        medoid = medoids[int(cid)]
+        domain = str(domains.get(members[0], DOMAIN_DOMESTIC))
         up_members = [c for c in members if pd.notna(r_n.get(c)) and r_n[c] > 0]
         dn_members = [c for c in members if pd.notna(r_n.get(c)) and r_n[c] < 0]
         flat = [c for c in members if c not in up_members and c not in dn_members]
@@ -303,30 +515,108 @@ def compute_cluster_representatives(
             g = r_n.reindex(grp_members)
             best = float(g.abs().max())
             has_dir = float(min_rep_move) <= 0 or best >= float(min_rep_move)
-            rep = str(g.abs().idxmax()) if has_dir else None
+            extreme = str(g.abs().idxmax()) if has_dir else None
             for code in grp_members:
                 value = float(g[code])
                 records.append(
                     {
                         "cluster": int(cid),
+                        "domain": domain,
                         "group": group_label,
                         "code": code,
                         "name": name_map.get(code, code),
                         f"ret{w}_pct": value,
                         "direction": direction_zh,
-                        "is_representative": code == rep,
+                        "is_representative": code == medoid,
+                        "is_extreme_mover": code == extreme,
                         "group_status": "representative" if has_dir else "no_direction",
                         "n_members": len(members),
                     }
                 )
     frame = pd.DataFrame(records)
+    if frame.empty:
+        return frame
     abs_col = frame[f"ret{w}_pct"].abs()
     frame = frame.assign(_abs=abs_col)
     frame = frame.sort_values(
-        ["cluster", "group", "is_representative", "_abs"],
-        ascending=[True, True, False, False],
+        ["cluster", "group", "is_representative", "is_extreme_mover", "_abs"],
+        ascending=[True, True, False, False, False],
     ).drop(columns=["_abs"])
     return frame.reset_index(drop=True)
+
+
+
+def plot_ward_dendrogram(
+    returns: pd.DataFrame,
+    labels: pd.Series,
+    name_map: dict[str, str],
+    *,
+    layout_width: int,
+    layout_height: int,
+    title: str = "Ward(1-corr) dendrogram (matches CSV cut)",
+    corr: pd.DataFrame | None = None,
+) -> object:
+    """Plotly dendrogram from the same Ward linkage used for cluster labels."""
+    import plotly.graph_objects as go
+
+    codes = [str(c) for c in returns.columns]
+    if len(codes) < 2:
+        fig = go.Figure()
+        fig.update_layout(title=title, width=layout_width, height=layout_height)
+        return fig
+    display = []
+    assigned: set[str] = set()
+    for code in codes:
+        base = (name_map.get(code) or code).strip() or code
+        label = base if base not in assigned else f"{base}({code})"
+        assigned.add(label)
+        display.append(label)
+    corr = _aligned_corr(returns, corr)
+    dist = (1.0 - corr).clip(lower=0.0).fillna(1.0)
+    np.fill_diagonal(dist.values, 0.0)
+    condensed = squareform(dist.values, checks=False)
+    z = linkage(condensed, method="ward")
+    dendro = scipy_dendrogram(z, labels=display, no_plot=True, color_threshold=None)
+    fig = go.Figure()
+    icoord = np.array(dendro["icoord"])
+    dcoord = np.array(dendro["dcoord"])
+    # Color leaves by final cluster id
+    lab_by_display = {
+        display[i]: int(labels.loc[codes[i]]) for i in range(len(codes))
+    }
+    # Draw U-links
+    for xs, ys in zip(icoord, dcoord):
+        fig.add_trace(
+            go.Scatter(
+                x=xs,
+                y=ys,
+                mode="lines",
+                line=dict(color="#64748b", width=1),
+                hoverinfo="skip",
+                showlegend=False,
+            )
+        )
+    # Leaf labels on x
+    leaf_pos = {lab: i * 10 for i, lab in enumerate(dendro["ivl"])}
+    fig.update_layout(
+        title=title,
+        width=layout_width,
+        height=layout_height,
+        showlegend=False,
+        xaxis=dict(
+            tickmode="array",
+            tickvals=[leaf_pos[lab] + 5 for lab in dendro["ivl"]],
+            ticktext=[
+                f"{lab} [C{lab_by_display.get(lab, '?')}]" if lab in lab_by_display else lab
+                for lab in dendro["ivl"]
+            ],
+            tickangle=90,
+            side="bottom",
+        ),
+        yaxis_title="Ward distance (1-corr)",
+        margin=dict(b=160),
+    )
+    return fig
 
 
 def fit_hrp_dendrograms(
@@ -345,8 +635,8 @@ def fit_hrp_dendrograms(
     fig_heat = model.hierarchical_clustering_estimator_.plot_dendrogram()
 
     for title, fig in (
-        ("Dendrogram (heatmap=False)", fig_no_heat),
-        ("Dendrogram (heatmap=True)", fig_heat),
+        ("HRP-CVaR reference (heatmap=False)", fig_no_heat),
+        ("HRP-CVaR reference (heatmap=True)", fig_heat),
     ):
         fig.update_layout(
             title=title,
@@ -355,9 +645,78 @@ def fit_hrp_dendrograms(
             showlegend=False,
         )
     return [
-        ("Dendrogram (heatmap=False)", fig_no_heat),
-        ("Dendrogram (heatmap=True)", fig_heat),
+        ("HRP-CVaR reference (heatmap=False)", fig_no_heat),
+        ("HRP-CVaR reference (heatmap=True)", fig_heat),
     ]
+
+
+def close_cache_usable(meta: dict, asof: str, lookback: int, calendar_last: str) -> bool:
+    """True when a saved close panel matches this as-of, lookback, and calendar."""
+    if not calendar_last:
+        return False
+    try:
+        cached_lookback = int(meta.get("lookback", -1))
+    except (TypeError, ValueError):
+        return False
+    return (
+        str(meta.get("asof") or "") == str(asof)
+        and cached_lookback == int(lookback)
+        and str(meta.get("calendar_last") or "") == str(calendar_last)
+    )
+
+
+def calendar_last_line(provider_uri: str) -> str:
+    path = Path(provider_uri).expanduser() / "calendars" / "day.txt"
+    if not path.is_file():
+        return ""
+    lines = [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    return lines[-1] if lines else ""
+
+
+def close_cache_paths(output: Path, asof: str, lookback: int) -> tuple[Path, Path]:
+    tag = str(asof).replace("-", "")
+    stem = output.parent / f"hrp_close_{tag}_lb{int(lookback)}"
+    return stem.with_suffix(".pkl"), stem.with_suffix(".json")
+
+
+def load_cached_close(
+    codes: tuple[str, ...],
+    *,
+    provider_uri: str,
+    test_period: tuple[str, str],
+    cache_pkl: Path | None,
+    cache_json: Path | None,
+    asof: str,
+    lookback: int,
+) -> pd.DataFrame:
+    """Reuse a close panel when the qlib calendar has not moved; otherwise load and save."""
+    calendar_last = calendar_last_line(provider_uri)
+    requested = [str(code) for code in codes]
+    if cache_pkl is not None and cache_json is not None and cache_pkl.is_file() and cache_json.is_file():
+        try:
+            meta = json.loads(cache_json.read_text(encoding="utf-8"))
+            cached = pd.read_pickle(cache_pkl)
+        except (OSError, ValueError, json.JSONDecodeError):
+            meta, cached = {}, pd.DataFrame()
+        if (
+            isinstance(cached, pd.DataFrame)
+            and close_cache_usable(meta, asof, lookback, calendar_last)
+            and all(code in cached.columns for code in requested)
+        ):
+            print(f"[INFO] Reusing HRP close cache {cache_pkl}")
+            return cached.loc[:, requested]
+    close, _ = load_data(requested, provider_uri=provider_uri, test_period=test_period)
+    if cache_pkl is not None and cache_json is not None:
+        cache_pkl.parent.mkdir(parents=True, exist_ok=True)
+        close.to_pickle(cache_pkl)
+        cache_json.write_text(
+            json.dumps(
+                {"asof": asof, "lookback": int(lookback), "calendar_last": calendar_last},
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+    return close
 
 
 def build_universe_result(
@@ -373,13 +732,26 @@ def build_universe_result(
     rep_window: int = 20,
     min_rep_move: float = MIN_REP_MOVE_PCT,
     dist_t: float = DIST_T,
+    min_corr: float = DEFAULT_MIN_CORR,
+    close_cache_pkl: Path | None = None,
+    close_cache_json: Path | None = None,
+    asof_date: str = "",
+    lookback_days: int = CLUSTER_LOOKBACK_DAYS,
 ) -> UniverseResult:
     result = UniverseResult(name=name, requested_codes=codes)
     if len(codes) < 2:
         result.error = f"{name}: fewer than 2 instruments requested."
         return result
 
-    close, _ = load_data(codes, provider_uri=provider_uri, test_period=test_period)
+    close = load_cached_close(
+        codes,
+        provider_uri=provider_uri,
+        test_period=test_period,
+        cache_pkl=close_cache_pkl,
+        cache_json=close_cache_json,
+        asof=asof_date,
+        lookback=lookback_days,
+    )
     returns, used, dropped = prepare_returns(close, codes)
     result.used_codes = used
     result.dropped_codes = dropped
@@ -391,10 +763,12 @@ def build_universe_result(
         )
         return result
 
-    result.figures = fit_hrp_dendrograms(
-        rename_returns_to_display_names(returns, name_map),
-        layout_width=layout_width,
-        layout_height=layout_height,
+    labels, domains, corr = domain_ward_labels(
+        returns,
+        name_map,
+        dist_t=dist_t,
+        n_clusters=n_clusters,
+        min_corr=min_corr,
     )
     result.cluster_reps = compute_cluster_representatives(
         returns,
@@ -404,7 +778,28 @@ def build_universe_result(
         rep_window=rep_window,
         min_rep_move=min_rep_move,
         dist_t=dist_t,
+        min_corr=min_corr,
+        labels=labels,
+        corr=corr,
+        domains=domains,
     )
+    ward_fig = plot_ward_dendrogram(
+        returns,
+        labels,
+        name_map,
+        layout_width=layout_width,
+        layout_height=layout_height,
+        corr=corr,
+    )
+    hrp_figs = fit_hrp_dendrograms(
+        rename_returns_to_display_names(returns, name_map),
+        layout_width=layout_width,
+        layout_height=layout_height,
+    )
+    result.figures = [
+        ("Ward(1-corr) dendrogram (matches CSV cut)", ward_fig),
+        *hrp_figs,
+    ]
     return result
 
 
@@ -426,45 +821,73 @@ def render_cluster_reps_html(
     rep_window: int,
     min_rep_move: float = MIN_REP_MOVE_PCT,
 ) -> str:
-    """Render 代表清单 table: one row per cluster × direction group."""
+    """Render 代表清单: medoid per cluster + extreme movers per direction group."""
     ret_col = f"ret{rep_window}_pct"
     group_zh = {"up": "涨组", "down": "跌组"}
     rows: list[str] = []
-    for (cid, glabel), grp in frame.groupby(["cluster", "group"], sort=True):
-        has_rep = bool(grp["is_representative"].any())
-        members = grp.sort_values(ret_col, key=lambda s: s.abs(), ascending=False)
-        detail = "、".join(
-            f"{r.code}({html.escape(str(r.name))} {_fmt_ret(getattr(r, ret_col))})"
-            for r in members.itertuples()
-        )
-        if has_rep:
-            rep = grp[grp["is_representative"]].iloc[0]
-            rep_cells = (
-                f"<td><b>{html.escape(str(rep['code']))}</b></td>"
-                f"<td>{html.escape(str(rep['name']))}</td>"
-                f"<td>{_fmt_ret(rep[ret_col])}</td>"
+    # Cluster-level medoid rows first summary
+    for cid, cgrp in frame.groupby("cluster", sort=True):
+        med = cgrp[cgrp["is_representative"]].drop_duplicates("code")
+        domain = str(cgrp["domain"].iloc[0]) if "domain" in cgrp.columns else ""
+        n_members = int(cgrp["n_members"].iloc[0]) if "n_members" in cgrp.columns else int(cgrp["code"].nunique())
+        if not med.empty:
+            r0 = med.iloc[0]
+            med_cells = (
+                f"<td><b>{html.escape(str(r0['code']))}</b></td>"
+                f"<td>{html.escape(str(r0['name']))}</td>"
+                f"<td>{_fmt_ret(r0[ret_col])}</td>"
             )
         else:
-            rep_cells = (
-                "<td colspan='3'>无明确方向"
-                f"（组内最大|涨跌| &lt; {float(min_rep_move):.1f}%）</td>"
-            )
+            med_cells = "<td colspan='3'>—</td>"
         rows.append(
-            "<tr>"
+            "<tr style='background:#f8fafc;'>"
             f"<td>{int(cid)}</td>"
-            f"<td>{group_zh.get(str(glabel), str(glabel))}</td>"
-            f"{rep_cells}"
-            f"<td>{len(members)}</td>"
-            f"<td>{detail}</td>"
+            f"<td>{html.escape(domain)}</td>"
+            "<td>medoid</td>"
+            f"{med_cells}"
+            f"<td>{n_members}</td>"
+            "<td>簇相关中心（is_representative）</td>"
             "</tr>"
         )
+        for glabel, grp in cgrp.groupby("group", sort=True):
+            members = grp.sort_values(ret_col, key=lambda s: s.abs(), ascending=False)
+            detail = "、".join(
+                f"{r.code}({html.escape(str(r.name))} {_fmt_ret(getattr(r, ret_col))}"
+                f"{'★' if bool(getattr(r, 'is_extreme_mover', False)) else ''})"
+                for r in members.itertuples()
+            )
+            movers = grp[grp["is_extreme_mover"].astype(bool)] if "is_extreme_mover" in grp.columns else grp.iloc[0:0]
+            if not movers.empty:
+                mv = movers.iloc[0]
+                mv_cells = (
+                    f"<td>{html.escape(str(mv['code']))}</td>"
+                    f"<td>{html.escape(str(mv['name']))}</td>"
+                    f"<td>{_fmt_ret(mv[ret_col])}</td>"
+                )
+            elif str(grp["group_status"].iloc[0]) == "no_direction":
+                mv_cells = (
+                    "<td colspan='3'>无明确方向"
+                    f"（组内最大|涨跌| &lt; {float(min_rep_move):.1f}%）</td>"
+                )
+            else:
+                mv_cells = "<td colspan='3'>—</td>"
+            rows.append(
+                "<tr>"
+                f"<td>{int(cid)}</td>"
+                f"<td>{html.escape(domain)}</td>"
+                f"<td>{group_zh.get(str(glabel), str(glabel))}</td>"
+                f"{mv_cells}"
+                f"<td>{len(members.drop_duplicates('code'))}</td>"
+                f"<td>{detail}</td>"
+                "</tr>"
+            )
     return (
         "<table border='1' cellspacing='0' cellpadding='4' "
         "style='border-collapse:collapse;font-size:13px;'>"
         "<thead><tr>"
-        "<th>簇</th><th>方向组</th><th>代表代码</th><th>名称</th>"
-        f"<th>近{rep_window}日涨跌</th><th>组内成员数</th>"
-        "<th>成员明细（按 |涨跌| 降序）</th>"
+        "<th>簇</th><th>域</th><th>角色</th><th>代码</th><th>名称</th>"
+        f"<th>近{rep_window}日涨跌</th><th>成员数</th>"
+        "<th>说明 / 成员明细（★=极端动量）</th>"
         "</tr></thead><tbody>"
         + "".join(rows)
         + "</tbody></table>"
@@ -480,6 +903,7 @@ def render_html(
     rep_window: int = 20,
     min_rep_move: float = MIN_REP_MOVE_PCT,
     dist_t: float = DIST_T,
+    min_corr: float = DEFAULT_MIN_CORR,
 ) -> None:
     generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     sections: list[str] = []
@@ -523,13 +947,15 @@ def render_html(
         if universe.cluster_reps is not None and not universe.cluster_reps.empty:
             n_clusters = int(universe.cluster_reps["cluster"].nunique())
             sections.append(
-                f"<div class=\"section\"><h3>聚类代表（近{rep_window}日涨跌最大；"
+                f"<div class=\"section\"><h3>聚类代表（相关 medoid + 极端动量；"
                 f"共 {n_clusters} 簇）</h3>"
             )
             sections.append(
-                f"<p class=\"meta\">切簇=Ward(1-corr) dist_t={float(dist_t):.2f}；"
-                "簇内按涨跌方向拆组，代表=组内 |区间涨跌幅| 最大的一只；"
-                f"组内最大|涨跌| &lt; {float(min_rep_move):.1f}% 标「无明确方向」不出代表</p>"
+                f"<p class=\"meta\">切簇=域内 Ward(1-corr) dist_t={float(dist_t):.2f}；"
+                f"域=bond/overseas/domestic；min_corr={float(min_corr):.2f} 拆弱簇；"
+                "is_representative=簇相关中心（medoid）；"
+                "is_extreme_mover=方向组内 |区间涨跌| 最大；"
+                f"组内最大|涨跌| &lt; {float(min_rep_move):.1f}% 标「无明确方向」</p>"
             )
             sections.append(
                 render_cluster_reps_html(
@@ -564,6 +990,13 @@ def main(argv: list[str] | None = None) -> int:
     name_map = build_name_lookup(args.fund_list_csv, holdings_csv)
 
     pool_universe_name = "待选池 cluster_mapping_selected"
+    cache_pkl, cache_json = close_cache_paths(args.output, args.asof_date, args.lookback_days)
+    cache_kwargs = dict(
+        close_cache_pkl=cache_pkl,
+        close_cache_json=cache_json,
+        asof_date=args.asof_date,
+        lookback_days=int(args.lookback_days),
+    )
     universes: list[UniverseResult] = []
     if holdings_codes is not None:
         universes.append(
@@ -579,6 +1012,8 @@ def main(argv: list[str] | None = None) -> int:
                 rep_window=args.rep_window,
                 min_rep_move=args.min_rep_move,
                 dist_t=args.dist_t,
+                min_corr=args.min_corr,
+                **cache_kwargs,
             )
         )
     else:
@@ -596,6 +1031,8 @@ def main(argv: list[str] | None = None) -> int:
             rep_window=args.rep_window,
             min_rep_move=args.min_rep_move,
             dist_t=args.dist_t,
+            min_corr=args.min_corr,
+            **cache_kwargs,
         )
     )
 
@@ -607,6 +1044,7 @@ def main(argv: list[str] | None = None) -> int:
         rep_window=args.rep_window,
         min_rep_move=args.min_rep_move,
         dist_t=args.dist_t,
+        min_corr=args.min_corr,
     )
     print(f"Wrote {args.output}")
     for universe in universes:

@@ -1,8 +1,8 @@
+import argparse
 import logging
 import time
 import pandas as pd
 import akshare as ak
-import random
 from logging.handlers import RotatingFileHandler
 import subprocess
 import os
@@ -11,6 +11,7 @@ import chardet
 import numpy as np
 import sys
 import importlib.util
+from datetime import date
 from pathlib import Path
 
 PROJECT_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
@@ -18,6 +19,14 @@ if str(PROJECT_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from etf_daily.paths import FUND_CRAWLER_LOG_DIR, FUND_LIST_CSV, QLIB_CHANGE_CSV_DIR, QLIB_PROVIDER_URI, QLIB_SCRIPTS_DIR
+from etf_daily.etl.sina_helpers import (
+    calendars_day_exists,
+    choose_dump_mode,
+    csv_max_date,
+    merge_ohlcv,
+    polite_delay_seconds,
+    should_skip_fund,
+)
 
 
 def normalize_path(p: str) -> str:
@@ -126,7 +135,7 @@ def fetch_fund_data_with_retry(
             # 指数退避策略（网页2的断路器优化思路）
             sleep_time = backoff_factor ** attempt
             time.sleep(sleep_time)
-            current_timeout = int(current_timeout * 1.2)  # 每次增加20%超时阈值
+            current_timeout = int(current_timeout * 1.2)  # 每次增加20%超时时长
 
         except Exception as e:
             logger.error(f"基金 {symbol} 发生非超时异常: {str(e)}", exc_info=True)
@@ -135,8 +144,18 @@ def fetch_fund_data_with_retry(
     return None  # 所有重试失败返回空值
 
 
-def fetch_and_save_data_parallel(dir_name, start_date, end_date):
-    """并行化基金数据抓取"""
+def fetch_and_save_data_parallel(
+    dir_name,
+    start_date,
+    end_date,
+    *,
+    as_of: str,
+    full: bool = False,
+    workers: int = 8,
+    polite_delay: bool = False,
+    progress_every: int = 50,
+):
+    """并行化基金数据抓取。默认跳过本地 CSV 已覆盖 as_of 的基金。"""
     try:
         logger.info("开始获取基金列表")
         codefundsecname = ak.fund_exchange_rank_em()
@@ -166,41 +185,64 @@ def fetch_and_save_data_parallel(dir_name, start_date, end_date):
 
         total_count = len(codefundsecname)
         success_count = 0
+        skipped_count = 0
         failed_codes = []
         codes = codefundsecname['基金代码'].tolist()
+        done_count = 0
 
         # Ensure target directory exists (dir_name may contain $home placeholder)
         dir_name = normalize_path(dir_name)
         os.makedirs(dir_name, exist_ok=True)
 
-        # 创建线程池（网页5推荐方式）
-        with ThreadPoolExecutor(max_workers=8) as executor:
+        max_workers = max(1, int(workers))
+        logger.info(
+            f"抓取模式: {'full' if full else 'incremental'} as_of={as_of} "
+            f"workers={max_workers} polite_delay={polite_delay}"
+        )
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {
                 executor.submit(
-                    process_single_fund,  # 封装的单基金处理函数
+                    process_single_fund,
                     code=code,
                     idx=idx + 1,
                     total=total_count,
                     dir_name=dir_name,
                     start_date=start_date,
-                    end_date=end_date
+                    end_date=end_date,
+                    as_of=as_of,
+                    full=full,
+                    polite_delay=polite_delay,
                 ): code for idx, code in enumerate(codes)
             }
 
-            # 进度监控（网页4的完成度跟踪）
             for future in as_completed(futures):
                 code = futures[future]
+                done_count += 1
                 try:
                     result = future.result()
-                    if result:
+                    if result == "skipped":
+                        skipped_count += 1
+                        success_count += 1
+                    elif result:
                         success_count += 1
                         logger.debug(f"基金 {code} 处理完成")
                 except Exception as e:
                     logger.error(f"基金 {code} 处理失败: {str(e)}", exc_info=True)
                     failed_codes.append(code)
 
-        # 汇总日志
-        logger.info(f"任务完成：成功 {success_count}/{total_count}")
+                if progress_every > 0 and (
+                    done_count % progress_every == 0 or done_count == total_count
+                ):
+                    logger.info(
+                        f"进度 {done_count}/{total_count} "
+                        f"ok={success_count} skipped={skipped_count} failed={len(failed_codes)}"
+                    )
+
+        logger.info(
+            f"任务完成：成功 {success_count}/{total_count} "
+            f"(skipped={skipped_count}, failed={len(failed_codes)})"
+        )
         if failed_codes:
             logger.warning(f"失败基金代码列表：{failed_codes}")
 
@@ -209,23 +251,39 @@ def fetch_and_save_data_parallel(dir_name, start_date, end_date):
         raise
 
 
-def process_single_fund(code, idx, total, dir_name, start_date, end_date):
-    """单支基金处理流程（封装为独立函数）"""
+def process_single_fund(
+    code,
+    idx,
+    total,
+    dir_name,
+    start_date,
+    end_date,
+    *,
+    as_of: str,
+    full: bool = False,
+    polite_delay: bool = False,
+):
+    """单支基金处理流程。返回 True / False / \"skipped\"。"""
+    file_path = os.path.join(dir_name, f"{code}.csv")
     try:
         logger.debug(f"开始处理基金 {code} ({idx}/{total})")
 
-        # 数据抓取（带重试机制）
+        if not full:
+            local_max = csv_max_date(file_path)
+            if should_skip_fund(local_max, as_of):
+                logger.debug(f"基金 {code} 已覆盖 as_of={as_of} (max={local_max})，跳过")
+                return "skipped"
+
         fund_df = fetch_fund_data_with_retry(
             code, start_date, end_date,
             max_retries=5,
             base_timeout=15
         )
 
-        if fund_df.empty:
+        if fund_df is None or fund_df.empty:
             logger.warning(f"基金 {code} 无有效数据")
             return False
 
-        # 数据清洗
         fund_df = fund_df.rename(columns={
             'date': 'date', 'open': 'open', 'close': 'close',
             'high': 'high', 'low': 'low', 'volume': 'volume'
@@ -233,84 +291,125 @@ def process_single_fund(code, idx, total, dir_name, start_date, end_date):
         fund_df["date"] = pd.to_datetime(fund_df['date']).dt.strftime('%Y-%m-%d')
         fund_df["code"] = code
 
-        # 保存数据
-        file_path = os.path.join(dir_name, f"{code}.csv")
-        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        if not full and os.path.isfile(file_path):
+            try:
+                old_df = pd.read_csv(file_path)
+                fund_df = merge_ohlcv(old_df, fund_df)
+            except Exception as e:
+                logger.warning(f"基金 {code} 合并旧 CSV 失败，改为全量覆盖: {e}")
+
+        os.makedirs(os.path.dirname(file_path) or ".", exist_ok=True)
         fund_df.to_csv(file_path, index=False)
         logger.debug(f"基金 {code} 数据已保存至 {file_path}")
         return True
 
-    except Exception as e:
-        raise  # 异常抛给上层处理
+    except Exception:
+        raise
     finally:
-        # 添加随机延迟（网页3的反爬建议）
-        delay = random.randint(1, 3)
-        time.sleep(delay)
+        delay = polite_delay_seconds(polite_delay)
+        if delay > 0:
+            time.sleep(delay)
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Sina ETF ETL → CSV + qlib dump_bin")
+    parser.add_argument(
+        "--as-of",
+        default=date.today().isoformat(),
+        help="Skip funds whose local CSV max date >= this (YYYY-MM-DD). Default: today.",
+    )
+    parser.add_argument(
+        "--full",
+        action="store_true",
+        help="Re-fetch and overwrite all funds; use dump_all.",
+    )
+    parser.add_argument("--workers", type=int, default=8, help="ThreadPool workers (default 8).")
+    parser.add_argument(
+        "--polite-delay",
+        action="store_true",
+        help="Opt-in 1–3s sleep after each fund (default off).",
+    )
+    parser.add_argument(
+        "--skip-dump",
+        action="store_true",
+        help="Fetch/write CSVs only; skip qlib dump_bin.",
+    )
+    parser.add_argument("--start-date", default="20050101", help="Legacy fetch start (YYYYMMDD).")
+    parser.add_argument("--end-date", default="20301202", help="Legacy fetch end (YYYYMMDD).")
+    return parser.parse_args(argv)
+
+
+def run_dump_bin(*, csv_path: str, qlib_dir: str, dump_mode: str) -> None:
+    if QLIB_SCRIPTS_DIR is None:
+        raise SystemExit("qlib_scripts_dir is unset. Set paths.qlib_scripts_dir in the local json.")
+    qlib_scripts_path = normalize_path(str(QLIB_SCRIPTS_DIR))
+    dump_bin_path = resolve_dump_bin_path(qlib_scripts_path)
+
+    for path in [csv_path, qlib_dir]:
+        if not os.path.exists(path):
+            logger.warning(f"路径不存在：{path}")
+
+    python_exe = sys.executable
+    if importlib.util.find_spec('fire') is None:
+        logger.error(
+            "缺少依赖模块 'fire'。请在运行脚本的 Python 环境中安装它，例如：\n"
+            f"{python_exe} -m pip install fire"
+        )
+        raise RuntimeError("缺少依赖模块 'fire'，已在日志中给出安装命令。")
+
+    command = [
+        python_exe,
+        dump_bin_path,
+        dump_mode,
+        '--data_path', csv_path,
+        '--qlib_dir', qlib_dir,
+        '--symbol_field_name', 'code',
+        '--date_field_name', 'date',
+        '--include_fields', 'open,high,low,close,volume',
+    ]
+    logger.info(f"运行 dump_bin: {dump_mode}")
+    try:
+        subprocess.run(command, check=True, capture_output=True)
+        logger.info("命令执行成功！")
+    except subprocess.CalledProcessError as e:
+        detected_encoding = chardet.detect(e.stderr)['encoding'] or 'utf-8'
+        decoded_stderr = e.stderr.decode(detected_encoding, errors='replace')
+        logger.error(f"命令执行失败，错误码：{e.returncode}")
+        logger.error("错误信息：")
+        logger.error(decoded_stderr)
+        raise
+    except KeyboardInterrupt:
+        logger.warning("程序被用户中断（Ctrl+C）")
+        logger.info("清理完成，程序退出")
+        raise
+    finally:
+        logger.info("执行最终清理")
 
 
 if __name__ == '__main__':
     try:
+        args = parse_args()
         logger.info("程序启动")
-        start_date = '20050101'
-        end_date = '20301202'
         csv_path = normalize_path(str(QLIB_CHANGE_CSV_DIR))
+        qlib_dir = normalize_path(str(QLIB_PROVIDER_URI))
 
-        fetch_and_save_data_parallel(csv_path, start_date, end_date)
+        fetch_and_save_data_parallel(
+            csv_path,
+            args.start_date,
+            args.end_date,
+            as_of=args.as_of,
+            full=args.full,
+            workers=args.workers,
+            polite_delay=args.polite_delay,
+        )
         logger.info("程序正常退出")
 
-        # 步骤2: 调用QLib数据转换脚本（全量替换数据）
-        if QLIB_SCRIPTS_DIR is None:
-            raise SystemExit("qlib_scripts_dir is unset. Set paths.qlib_scripts_dir in the local json.")
-        qlib_scripts_path = normalize_path(str(QLIB_SCRIPTS_DIR))
-        qlib_dir = normalize_path(str(QLIB_PROVIDER_URI))
-        dump_bin_path = resolve_dump_bin_path(qlib_scripts_path)
-
-        # 检查路径是否存在（参考[1,5](@ref)）
-        for path in [csv_path, qlib_dir]:
-            if not os.path.exists(path):
-                logger.warning(f"路径不存在：{path}")
-
-        # 在当前 Python 环境中运行 QLib 脚本（使用 sys.executable）并先检查依赖
-        python_exe = sys.executable
-
-        # 预检查关键依赖 fire，避免子进程报错难以定位
-        if importlib.util.find_spec('fire') is None:
-            logger.error(
-                "缺少依赖模块 'fire'。请在运行脚本的 Python 环境中安装它，例如：\n"
-                f"{python_exe} -m pip install fire"
-            )
-            raise RuntimeError("缺少依赖模块 'fire'，已在日志中给出安装命令。")
-
-        # 构造命令参数列表（使用列表形式避免注入风险）
-        command = [
-            python_exe,
-            dump_bin_path,
-            'dump_all',
-            '--data_path', csv_path,
-            '--qlib_dir', qlib_dir,
-            '--symbol_field_name', 'code',
-            '--date_field_name', 'date',
-            '--include_fields', 'open,high,low,close,volume',
-        ]
-
-        try:
-            # 执行命令并捕获原始字节（避免编码问题[3,6](@ref)）
-            result = subprocess.run(command, check=True, capture_output=True)
-            logger.info("命令执行成功！输出：")
-        except subprocess.CalledProcessError as e:
-            # 同样处理错误输出（参考[5,6](@ref)）
-            detected_encoding = chardet.detect(e.stderr)['encoding']
-            decoded_stderr = e.stderr.decode(detected_encoding)
-            logger.error(f"命令执行失败，错误码：{e.returncode}")
-            logger.error("错误信息：")
-            logger.error(decoded_stderr)
-        except KeyboardInterrupt:
-            logger.warning("程序被用户中断（Ctrl+C）")
-            # 清理操作（参考[5,6](@ref)）
-            logger.info("清理完成，程序退出")
-        finally:
-            # 确保所有清理操作在此执行（解决SyntaxError[5,6](@ref)）
-            logger.info("执行最终清理")
+        if args.skip_dump:
+            logger.info("--skip-dump: 跳过 qlib dump_bin")
+        else:
+            dump_mode = choose_dump_mode(args.full, calendars_day_exists(qlib_dir))
+            run_dump_bin(csv_path=csv_path, qlib_dir=qlib_dir, dump_mode=dump_mode)
 
     except Exception as e:
         logger.exception("未捕获的全局异常")  # 自动记录堆栈跟踪[5,6](@ref)
+        raise SystemExit(1) from e

@@ -634,6 +634,55 @@ def _listing_one_worker(code: str) -> tuple[str, dict | None, dict | None, str |
         return code, None, None, str(exc)
 
 
+def listing_page_exists(out_dir: Path, code: str, end: str) -> bool:
+    """True when a non-empty from-listing HTML already exists for this end date."""
+    end_tag = pd.Timestamp(end).strftime("%Y%m%d")
+    code_u = str(code).upper()
+    for path in out_dir.glob(f"regime_transition_{code_u}_*_{end_tag}_adaptive.html"):
+        stem = path.stem
+        if any(token in stem for token in ("_fig9", "_fig10", "_oracle")):
+            continue
+        if path.is_file() and path.stat().st_size > 0:
+            return True
+    return False
+
+
+def listing_codes_to_render(
+    codes: list[str],
+    out_dir: Path,
+    end: str,
+    listing_csv: Path | None,
+    force: bool,
+) -> tuple[list[str], list[dict[str, Any]]]:
+    """Codes still needing a listing pass, plus CSV rows kept for skipped codes.
+
+    A code is skipped only when its page exists and ``listing_dates.csv`` has a row.
+    ``force`` redraws every code and keeps nothing.
+    """
+    if force:
+        return list(codes), []
+    saved: dict[str, dict[str, Any]] = {}
+    if listing_csv is not None and listing_csv.is_file():
+        try:
+            frame = pd.read_csv(listing_csv)
+        except Exception:  # noqa: BLE001
+            frame = pd.DataFrame()
+        if "code" in frame.columns:
+            for rec in frame.to_dict(orient="records"):
+                key = str(rec.get("code") or "").strip().upper()
+                if key:
+                    saved[key] = rec
+    render: list[str] = []
+    kept: list[dict[str, Any]] = []
+    for code in codes:
+        key = str(code).upper()
+        if key in saved and listing_page_exists(out_dir, key, end):
+            kept.append(saved[key])
+        else:
+            render.append(code)
+    return render, kept
+
+
 def _run_listing_batch(
     *,
     codes: list[str],
@@ -879,9 +928,23 @@ def main(argv: list[str] | None = None) -> int:
         fair_path_extra_trail_years=args.fair_path_extra_trail_years,
     )
 
+    force_redraw = bool(args.retrain) or args.live_snapshot is not None
+    render_codes, kept_listing_rows = listing_codes_to_render(
+        codes,
+        out_dir,
+        end_date,
+        out_dir / "listing_dates.csv",
+        force_redraw,
+    )
+    if kept_listing_rows:
+        print(
+            f"[INFO] skip {len(kept_listing_rows)} codes with existing listing HTML "
+            f"for {end_date}"
+        )
+
     try:
         listing_rows, summary_rows, errors = _run_listing_batch(
-            codes=codes,
+            codes=render_codes,
             jobs=int(args.jobs),
             ctx=listing_ctx,
             fail_fast=bool(args.fail_fast),
@@ -890,9 +953,11 @@ def main(argv: list[str] | None = None) -> int:
         traceback.print_exc()
         return 1
 
-    pd.DataFrame(listing_rows).to_csv(
-        out_dir / "listing_dates.csv", index=False, encoding="utf-8-sig"
-    )
+    listing_out = pd.DataFrame(kept_listing_rows + listing_rows)
+    if not listing_out.empty and "code" in listing_out.columns:
+        listing_out["code"] = listing_out["code"].astype(str).str.upper()
+        listing_out = listing_out.drop_duplicates(subset=["code"], keep="last")
+    listing_out.to_csv(out_dir / "listing_dates.csv", index=False, encoding="utf-8-sig")
     # Merge newly discovered listing dates into persistent cache.
     if listing_cache_path is not None and listing_rows:
         for row in listing_rows:

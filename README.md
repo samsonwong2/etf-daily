@@ -33,21 +33,33 @@ etf-daily etl
 etf-daily pool
 etf-daily cluster-review
 etf-daily regime --skip-rebuild --skip-html
-etf-daily adaptive --as-of 2026-09-29
-etf-daily listing --as-of 2026-09-29
-etf-daily hrp --as-of 2026-09-29
-etf-daily hrp --dist-t 0.8 --as-of 2026-09-29
-etf-daily triggers --listing-dir "$PLOTLY_ROOT/20260929_from_listing"
-etf-daily b1235 --listing-dir "$PLOTLY_ROOT/20260929_from_listing"
-etf-daily b1235-backtest --listing-dir "$PLOTLY_ROOT/20260929_from_listing"
-etf-daily rules7 --listing-dir "$PLOTLY_ROOT/20260929_from_listing"
+etf-daily adaptive --as-of 2026-10-13
+etf-daily listing --as-of 2026-10-13
+etf-daily hrp --as-of 2026-10-13
+etf-daily hrp --dist-t 0.8 --as-of 2026-10-13
+etf-daily triggers --listing-dir "$PLOTLY_ROOT/20260930_from_listing"
+etf-daily b1235 --listing-dir "$PLOTLY_ROOT/20260930_from_listing"
+etf-daily b1235-backtest --listing-dir "$PLOTLY_ROOT/20260930_from_listing"
+etf-daily rules7 --listing-dir "$PLOTLY_ROOT/20261013_from_listing"
 ```
 
 `listing` is incremental unless the shell is run with `INCREMENTAL=0`. Figure 12 runs unless `FIG12=0`.
 
 ### `etf-daily etl`
 
-Refreshes the fund list and qlib binary data. This needs network and `paths.qlib_scripts_dir` in the local json. This does not draw HTML.
+Refreshes the fund list and qlib binary data from the sina ETL script. This needs network and `paths.qlib_scripts_dir` in the local json. This does not draw HTML. Prices written to CSV are unadjusted; `adaptive` applies post-hoc qfq when it loads qlib bars.
+
+Args after `--` go to the underlying script.
+
+```bash
+etf-daily etl
+etf-daily etl -- --full
+etf-daily etl -- --as-of 2026-09-30 --skip-dump
+```
+
+- `etf-daily etl` — daily default. Skips funds whose local CSV max date is already ≥ today. Uses `dump_update` when qlib `calendars/day.txt` exists, otherwise `dump_all`. No per-fund sleep unless `--polite-delay`.
+- `etf-daily etl -- --full` — re-fetch every fund, overwrite CSVs, always `dump_all`. Use when the store looks dirty or you want a full rebuild.
+- `etf-daily etl -- --as-of 2026-09-30 --skip-dump` — treat a fund as fresh when its CSV max date ≥ `2026-09-30`, and skip `dump_bin` (CSV / fund-list only). Handy to verify skip behavior or refresh CSVs without touching qlib binaries.
 
 ### `etf-daily pool`
 
@@ -100,6 +112,12 @@ Two opt-in flags change the verdict; the defaults keep the rules above. `--b3-mo
 
 Replays the B1235 scoring on every historical bar of every equity HTML in that directory and writes `b1235_ablation.{md,csv}`, `b1235_yearly.csv`, and `b1235_basket.csv` under `{listing-dir}/b1235_backtest`. Entry is the next bar's open. It reports forward 5/10/20/40-day returns, hit rate, excess over the same-date pool mean, 20-day max adverse excursion, and an ATR-stop / fig8-target exit simulation. It also reports an equal-weight basket that holds each signal for 20 days. Results are split in-sample / out-of-sample at `--split-date` (default 2022-01-01). The variants are leave-one-condition-out, single conditions, each branch of B1/B2/B3, and sweeps of deep gap, min R:R, stop ATR multiple, and B5 target. `--ohlcv-dir DIR` reads `CODE.csv` files (`date,open,high,low,close`) instead of HTML. The first run caches the panel in `panel_cache.pkl`; pass `--no-cache` after the data changes.
 
+### `etf-daily rules7 --listing-dir "$PLOTLY_ROOT/YYYYMMDD_from_listing"`
+
+Applies the buy/sell rules in `docs/7只ETF_买卖规律对比.md` to every equity HTML in that directory and writes `rules7_checklist_{YYYYMMDD}.csv` and `rules7_checklist_{YYYYMMDD}.md` back into it. Names containing 债 and the bond list are skipped. The 7 documented codes use their own rules. Every other code is auto-typed from its own history (平稳震荡 / 慢趋势 / 高波动主题 / 长期下跌或周期, or 历史不足 under one year) and uses that type's rules.
+
+The output describes day T only. Each rule is split into its components: fig9 near-lower and its rising edge, the aux buy and sell legs, B1 discount, fast pattern, fig9 and fig8 near-upper, the mid-band stretch legs, the G1 legs, and the trailing stop. Each component gets its reading and a pass mark, and a summary column lists the key indicators that fire. Position state is replayed from the first bar, but only today's result is written: 持仓 / 空仓, peak close, trailing-stop price and distance, and whether G1 has fired in the open trade. Today's action is 买 / 卖 / 持有 / 观望, filled at the T+1 close. Rows are annotated from `decision_packs/{asof}/cluster_representatives_*_d080.csv` (HRP coarse clusters): 聚类 / 是否簇代表 / 推荐买入. Same-day buy signals in one cluster keep only one 推荐买入 (prefer the cluster representative). The md lists recommended buys, raw buys, sells, an HRP cluster table, open positions, near-trigger names, and thresholds. `--cluster-csv` overrides the pack path; `--rewrite-from-csv` re-annotates an existing checklist without rescanning HTML. `--jobs` (default 8) sets the worker count. Research only; it does not change production.
+
 ### `etf-daily morning --as-of YYYY-MM-DD --next-day YYYY-MM-DD`
 
 Writes `morning.html` and `morning_receipt.json` into `$PLOTLY_ROOT/{YYYYMMDD}_from_listing`. The page is a receipt. `STOP` means a landed file is missing or the last bar is not `--as-of`, and the short list is hidden. `WARN` still shows the list: `go_nogo` pass is model calibration, and the reversal file is often older because the daily run skips rebuilding it. `scripts/accept_eod.sh` runs this after triggers. Re-run this command alone when the receipt failed and the earlier files are already on disk.
@@ -112,6 +130,8 @@ Run these during the session, while Qlib still has no bar for today. `--as-of` d
 etf-daily regime --skip-html --intraday
 etf-daily adaptive --intraday
 etf-daily listing --intraday
+etf-daily hrp --dist-t 0.8 --as-of 2026-10-13
+etf-daily rules7 --listing-dir "$PLOTLY_ROOT/20261013_from_listing"
 ```
 
 Run them in that order. `listing` reads today's `$PLOTLY_ROOT/{YYYYMMDD}all_adaptive` from `adaptive`. If that directory is missing, `listing` exits and prints the path.

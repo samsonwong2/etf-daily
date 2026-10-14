@@ -1698,6 +1698,8 @@ def write_markdown(
 def run(argv: list[str] | None = None) -> pd.DataFrame:
     args = parse_args(argv)
     listing = _resolve(args.listing_dir)
+    if not listing.is_dir():
+        raise SystemExit(f"listing directory not found: {listing}")
     as_of = pd.Timestamp(args.as_of).normalize()
     next_day = pd.Timestamp(args.next_day).normalize()
     tag = next_day.strftime("%Y%m%d")

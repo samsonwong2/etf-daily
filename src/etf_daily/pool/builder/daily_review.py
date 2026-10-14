@@ -37,6 +37,7 @@ from .audit import (
     load_mapping_csv,
     parse_windows,
     save_focus_outputs,
+    window_bounds,
 )
 from .code_utils import build_normalized_code_set, code_in_normalized_set, normalize_code
 from .compare import _df_to_md_table, build_report, load_codes_from_csv
@@ -386,9 +387,14 @@ def build_forward_metrics_from_state(
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     mapping_df = state["mapping_df"]
     codes = mapping_df["code"].astype(str).tolist()
-    max_window = max(windows) if windows else 20
-    future_start = (pd.Timestamp(future_end) - pd.tseries.offsets.BDay(max_window + 40)).strftime("%Y-%m-%d")
-    future_close = fetch_close_prices(cluster_module, codes, future_start, future_end)
+    future_start, _ = window_bounds(cluster_module.TEST_PERIOD[1], future_end, windows)
+    future_close = fetch_close_prices(
+        cluster_module,
+        codes,
+        future_start,
+        future_end,
+        raw_close=state.get("raw_close"),
+    )
     future_df = compute_trailing_return_metrics(future_close, future_end, windows)
     member_map = mapping_df.groupby("cluster")["code"].apply(list).to_dict()
     build_metrics, _ = build_build_window_metrics(
@@ -859,7 +865,7 @@ def run_daily_review(args: argparse.Namespace) -> int:
     state = None
     returns = None
     try:
-        state = build_runtime_state(cluster_module, args.mapping_csv)
+        state = build_runtime_state(cluster_module, args.mapping_csv, future_end=args.future_end)
         state["mapping_df"] = overlay_hand_selected(state["mapping_df"], hand_codes)
         state["final_selected"] = list(dict.fromkeys(hand_codes))
         mapping_df = state["mapping_df"]
