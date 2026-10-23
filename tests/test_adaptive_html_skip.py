@@ -29,3 +29,6 @@ def test_codes_to_render_skips_existing_unless_forced(tmp_path: Path):
     codes = ["SH510300", "SZ159915"]
     assert codes_to_render(codes, tmp_path, "2026-04-01", "2026-09-30", False) == ["SZ159915"]
     assert codes_to_render(codes, tmp_path, "2026-04-01", "2026-09-30", True) == codes
+    assert codes_to_render(
+        codes, tmp_path, "2026-04-01", "2026-09-30", False, stale_codes={"sh510300"}
+    ) == codes

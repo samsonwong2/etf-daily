@@ -31,6 +31,10 @@ _OVERLAY_HTML_MARK = re.compile(
     r"_(fig\d|oracle|aux_edge|hard_touch|near_edge)", re.IGNORECASE
 )
 
+# One ETF tick is ~1e-3. Stay under that so a revised official bar is redrawn,
+# and above float32 noise so an unchanged bar is kept.
+END_BAR_MATCH_TOL = 1e-5
+
 TRAIL_YAXIS: dict[float, str] = {
     2.0: "y10",
     1.0: "y11",
@@ -91,6 +95,86 @@ def _fig7_candle(traces: list[dict[str, Any]]) -> dict[str, Any] | None:
             if yax in {"y10", "y11", "y12", "y13", "y14"}:
                 return tr
     return None
+
+
+def _ohlcv_on_day(frame: pd.DataFrame, day: pd.Timestamp) -> pd.Series | None:
+    """One OHLC row on ``day``, or None when that session is absent."""
+    if frame is None or frame.empty:
+        return None
+    work = frame.copy()
+    if "datetime" in work.columns:
+        idx = pd.to_datetime(work["datetime"]).dt.normalize()
+        work = work.set_index(idx)
+    else:
+        work.index = pd.DatetimeIndex(pd.to_datetime(work.index)).normalize()
+    work = work[~work.index.duplicated(keep="last")]
+    if day not in work.index:
+        return None
+    row = work.loc[day]
+    if isinstance(row, pd.DataFrame):
+        row = row.iloc[-1]
+    return row
+
+
+def end_ohlc_matches(
+    html_ohlcv: pd.DataFrame,
+    official_ohlcv: pd.DataFrame,
+    end: str,
+    *,
+    tol: float,
+) -> bool:
+    """Whether the HTML bar on ``end`` already is the official OHLCV.
+
+    A missing official session is not a mismatch: there is nothing to replace
+    the page with. A page that does not contain ``end`` does not match.
+    """
+    day = pd.Timestamp(end).normalize()
+    official = _ohlcv_on_day(official_ohlcv, day)
+    if official is None:
+        return True
+    html_row = _ohlcv_on_day(html_ohlcv, day)
+    if html_row is None:
+        return False
+    for col in ("$open", "$high", "$low", "$close"):
+        if col not in html_row.index or col not in official.index:
+            return False
+        left = float(pd.to_numeric(html_row[col], errors="coerce"))
+        right = float(pd.to_numeric(official[col], errors="coerce"))
+        if not (np.isfinite(left) and np.isfinite(right) and abs(right) > 1e-12):
+            return False
+        if abs(left / right - 1.0) > float(tol):
+            return False
+    return True
+
+
+def stale_end_bar_codes(
+    pages: dict[str, Path],
+    official_ohlcv_for,
+    end: str,
+    *,
+    tol: float,
+) -> set[str]:
+    """Codes whose saved HTML bar on ``end`` is not the official OHLCV.
+
+    ``official_ohlcv_for(code)`` returns the frame the redraw would plot.
+    Unreadable pages are stale so the next pass replaces them.
+    """
+    from etf_daily.lib.fair_path_band_signals import load_ohlcv_from_regime_html
+
+    stale: set[str] = set()
+    for code, path in pages.items():
+        page = Path(path)
+        if not page.is_file() or page.stat().st_size <= 0:
+            continue
+        try:
+            _, html_ohlcv = load_ohlcv_from_regime_html(page)
+            official = official_ohlcv_for(code)
+            if not end_ohlc_matches(html_ohlcv, official, end, tol=tol):
+                stale.add(str(code).upper())
+        except Exception as exc:  # noqa: BLE001
+            print(f"[WARN] {code}: cannot compare {end} bar ({exc}); redraw")
+            stale.add(str(code).upper())
+    return stale
 
 
 def overlap_close_ok(

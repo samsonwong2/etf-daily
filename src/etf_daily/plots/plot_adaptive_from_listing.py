@@ -634,8 +634,8 @@ def _listing_one_worker(code: str) -> tuple[str, dict | None, dict | None, str |
         return code, None, None, str(exc)
 
 
-def listing_page_exists(out_dir: Path, code: str, end: str) -> bool:
-    """True when a non-empty from-listing HTML already exists for this end date."""
+def listing_page_path(out_dir: Path, code: str, end: str) -> Path | None:
+    """Existing from-listing HTML for this end date, ignoring side overlays."""
     end_tag = pd.Timestamp(end).strftime("%Y%m%d")
     code_u = str(code).upper()
     for path in out_dir.glob(f"regime_transition_{code_u}_*_{end_tag}_adaptive.html"):
@@ -643,8 +643,13 @@ def listing_page_exists(out_dir: Path, code: str, end: str) -> bool:
         if any(token in stem for token in ("_fig9", "_fig10", "_oracle")):
             continue
         if path.is_file() and path.stat().st_size > 0:
-            return True
-    return False
+            return path
+    return None
+
+
+def listing_page_exists(out_dir: Path, code: str, end: str) -> bool:
+    """True when a non-empty from-listing HTML already exists for this end date."""
+    return listing_page_path(out_dir, code, end) is not None
 
 
 def listing_codes_to_render(
@@ -653,14 +658,18 @@ def listing_codes_to_render(
     end: str,
     listing_csv: Path | None,
     force: bool,
+    stale_codes: set[str] | None = None,
 ) -> tuple[list[str], list[dict[str, Any]]]:
     """Codes still needing a listing pass, plus CSV rows kept for skipped codes.
 
-    A code is skipped only when its page exists and ``listing_dates.csv`` has a row.
+    A code is skipped only when its page exists, ``listing_dates.csv`` has a row,
+    and the page's ``end`` bar still matches official OHLCV. ``stale_codes`` are
+    redrawn (incremental append when that mode is on, not a full history rebuild).
     ``force`` redraws every code and keeps nothing.
     """
     if force:
         return list(codes), []
+    stale = {str(code).upper() for code in (stale_codes or set())}
     saved: dict[str, dict[str, Any]] = {}
     if listing_csv is not None and listing_csv.is_file():
         try:
@@ -676,7 +685,7 @@ def listing_codes_to_render(
     kept: list[dict[str, Any]] = []
     for code in codes:
         key = str(code).upper()
-        if key in saved and listing_page_exists(out_dir, key, end):
+        if key in saved and key not in stale and listing_page_exists(out_dir, key, end):
             kept.append(saved[key])
         else:
             render.append(code)
@@ -929,12 +938,42 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     force_redraw = bool(args.retrain) or args.live_snapshot is not None
+    stale_codes: set[str] = set()
+    if not force_redraw:
+        pages = {
+            code: path
+            for code in codes
+            if (path := listing_page_path(out_dir, code, end_date)) is not None
+        }
+        if pages:
+            from etf_daily.lib.incremental_from_listing import (
+                END_BAR_MATCH_TOL,
+                stale_end_bar_codes,
+            )
+
+            def _official_ohlcv(code: str):
+                return pool._load_ohlcv(
+                    pm, code, end_date, train_cutoff=train_cutoff
+                )
+
+            stale_codes = stale_end_bar_codes(
+                pages,
+                _official_ohlcv,
+                end_date,
+                tol=END_BAR_MATCH_TOL,
+            )
+    if stale_codes:
+        print(
+            f"[INFO] redraw {len(stale_codes)} codes whose {end_date} bar "
+            "differs from Qlib; incremental mode appends that bar only"
+        )
     render_codes, kept_listing_rows = listing_codes_to_render(
         codes,
         out_dir,
         end_date,
         out_dir / "listing_dates.csv",
         force_redraw,
+        stale_codes,
     )
     if kept_listing_rows:
         print(

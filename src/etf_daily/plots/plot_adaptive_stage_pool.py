@@ -1373,17 +1373,40 @@ def adaptive_page_exists(out_dir: Path, code: str, start: str, end: str) -> bool
     return any(path.is_file() and path.stat().st_size > 0 for path in out_dir.glob(pattern))
 
 
+def adaptive_page_path(out_dir: Path, code: str, start: str, end: str) -> Path | None:
+    """Existing adaptive HTML for this window."""
+    start_tag = pd.Timestamp(start).strftime("%Y%m%d")
+    end_tag = pd.Timestamp(end).strftime("%Y%m%d")
+    code_u = str(code).upper()
+    pattern = f"regime_transition_{code_u}_*_{start_tag}_{end_tag}_adaptive.html"
+    for path in out_dir.glob(pattern):
+        if path.is_file() and path.stat().st_size > 0:
+            return path
+    return None
+
+
 def codes_to_render(
     codes: list[str],
     out_dir: Path,
     start: str,
     end: str,
     force: bool,
+    stale_codes: set[str] | None = None,
 ) -> list[str]:
-    """Codes that still need an OOS HTML pass. ``force`` redraws every code."""
+    """Codes that still need an OOS HTML pass.
+
+    ``force`` redraws every code. ``stale_codes`` redraw even when a page exists,
+    because its ``end`` bar is not the official OHLCV.
+    """
     if force:
         return list(codes)
-    return [code for code in codes if not adaptive_page_exists(out_dir, code, start, end)]
+    stale = {str(code).upper() for code in (stale_codes or set())}
+    render: list[str] = []
+    for code in codes:
+        key = str(code).upper()
+        if key in stale or not adaptive_page_exists(out_dir, key, start, end):
+            render.append(code)
+    return render
 
 
 def _run_oos_batch(
@@ -1634,7 +1657,35 @@ def main(argv: list[str] | None = None) -> int:
 
     # OOS
     force_redraw = bool(args.retrain) or args.live_snapshot is not None
-    render_codes = codes_to_render(codes, out_dir, start, end, force_redraw)
+    stale_codes: set[str] = set()
+    if not force_redraw:
+        pages = {
+            code: path
+            for code in codes
+            if (path := adaptive_page_path(out_dir, code, start, end)) is not None
+        }
+        if pages:
+            from etf_daily.lib.incremental_from_listing import (
+                END_BAR_MATCH_TOL,
+                stale_end_bar_codes,
+            )
+
+            def _official_ohlcv(code: str):
+                return _load_ohlcv(pm, code, end, train_cutoff=train_cutoff)
+
+            stale_codes = stale_end_bar_codes(
+                pages,
+                _official_ohlcv,
+                end,
+                tol=END_BAR_MATCH_TOL,
+            )
+    if stale_codes:
+        print(
+            f"[oos] redraw {len(stale_codes)} codes whose {end} bar differs from Qlib"
+        )
+    render_codes = codes_to_render(
+        codes, out_dir, start, end, force_redraw, stale_codes
+    )
     skipped = len(codes) - len(render_codes)
     if skipped:
         print(f"[oos] skip {skipped} codes with existing HTML for {start}→{end}")
