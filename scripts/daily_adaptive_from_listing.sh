@@ -20,6 +20,9 @@
 #   CODES=SH588710 AS_OF=2026-09-04 PY=... ./scripts/daily_adaptive_from_listing.sh
 #
 # 共享训练缓存 / 上市日缓存（默认开启）:
+#   冻结方法来自 $PLOTLY_ROOT/_train_cache，缺的代码会补训。
+#   不读 {YYYYMMDD}all_adaptive，盘中也不需要先跑 etf-daily adaptive --intraday。
+#   CONFIG_SOURCE_DIR=... 可改用指定目录（缺代码则报错，不补训）。
 #   TRAIN_CACHE_DIR=... LISTING_CACHE=... AS_OF=... PY=... ./scripts/daily_adaptive_from_listing.sh
 #   TRAIN_CACHE_DIR=off LISTING_CACHE=off 可关
 #
@@ -61,7 +64,6 @@ if ! date -d "${AS_OF}" >/dev/null 2>&1; then
   exit 2
 fi
 AS_OF_TAG="$(date -d "${AS_OF}" +%Y%m%d)"
-CONFIG_SOURCE_DIR="${CONFIG_SOURCE_DIR:-${PLOTLY_ROOT}/${AS_OF_TAG}all_adaptive}"
 HTML_OUT_DIR="${HTML_OUT_DIR:-${PLOTLY_ROOT}/${AS_OF_TAG}_from_listing}"
 INTRADAY="${INTRADAY:-0}"
 if [[ "${INTRADAY}" == "1" || "${INTRADAY}" == "true" || "${INTRADAY}" == "yes" ]]; then
@@ -138,12 +140,14 @@ ARGS=(
   --as-of "${AS_OF}"
   --train-cutoff "${TRAIN_CUTOFF}"
   --validation-dir "${VALIDATION_DIR}"
-  --config-source-dir "${CONFIG_SOURCE_DIR}"
   --html-out-dir "${HTML_OUT_DIR}"
   --jobs "${JOBS}"
   --incremental-mode "${INCREMENTAL_MODE}"
 )
 
+if [[ -n "${CONFIG_SOURCE_DIR}" ]]; then
+  ARGS+=(--config-source-dir "${CONFIG_SOURCE_DIR}")
+fi
 _tc="$(echo "${TRAIN_CACHE_DIR}" | tr '[:upper:]' '[:lower:]')"
 if [[ -n "${TRAIN_CACHE_DIR}" && "${_tc}" != "off" && "${_tc}" != "none" && "${_tc}" != "0" ]]; then
   ARGS+=(--train-cache-dir "${TRAIN_CACHE_DIR}")
@@ -178,7 +182,7 @@ if [[ -n "${FAIR_PATH_EXTRA_TRAIL_YEARS}" && "${_fp_extra}" != "off" && "${_fp_e
 fi
 
 echo "[INFO] AS_OF=${AS_OF} TRAIN_CUTOFF=${TRAIN_CUTOFF} JOBS=${JOBS} RETRAIN=${RETRAIN}"
-echo "[INFO] CONFIG_SOURCE_DIR=${CONFIG_SOURCE_DIR}"
+echo "[INFO] CONFIG_SOURCE_DIR=${CONFIG_SOURCE_DIR:-shared train cache}"
 echo "[INFO] HTML_OUT_DIR=${HTML_OUT_DIR}"
 echo "[INFO] INCREMENTAL_MODE=${INCREMENTAL_MODE} PREV_LISTING_DIR=${PREV_LISTING_DIR:-}"
 echo "[INFO] TRAIN_CACHE_DIR=${TRAIN_CACHE_DIR}"

@@ -1,14 +1,14 @@
 """Morning receipt for one listing directory.
 
 ```
-accept_eod steps 1-8
+accept_eod steps 1-7
         |
         v
 etf_daily.morning
         |
         +-- pool codes -------- CLUSTER_MAPPING_SELECTED_TXT
         +-- html + last bar --- listing/*.html   (all pool codes, serial)
-        +-- ticket codes ------ load_universe(adaptive_dir)
+        +-- ticket codes ------ load_universe(adaptive_dir) when a ticket card exists
         +-- trigger codes ----- pool codes where is_bond is false
         +-- go_nogo / reversal  VALIDATION_DIR
         +-- d080 -------------- HRP_OUTPUT_DIR
@@ -254,15 +254,15 @@ def build_receipt(
     ticket_path = adaptive_dir / "ticket_card.csv"
     meta_path = adaptive_dir / "ticket_card_meta.json"
     ticket_rows: dict[str, pd.Series] = {}
-    ticket_bits: list[str] = []
-    expected_ticket: list[str] = []
-    try:
-        expected_ticket, _names = load_universe(adaptive_dir)
-    except (OSError, ValueError, KeyError, pd.errors.EmptyDataError) as exc:
-        ticket_bits.append(f"票卡代码表读失败 {exc}")
-    if not ticket_path.is_file():
-        ticket_bits.append("ticket_card.csv 缺失")
+    if not ticket_path.is_file() or not meta_path.is_file():
+        checks.append(_check("ticket_card", "skip", "无票卡，候选名单为空"))
     else:
+        ticket_bits: list[str] = []
+        expected_ticket: list[str] = []
+        try:
+            expected_ticket, _names = load_universe(adaptive_dir)
+        except (OSError, ValueError, KeyError, pd.errors.EmptyDataError) as exc:
+            ticket_bits.append(f"票卡代码表读失败 {exc}")
         ticket_frame = _read_csv(ticket_path)
         if "as_of" not in ticket_frame.columns or "code" not in ticket_frame.columns:
             ticket_bits.append("ticket_card.csv 缺 as_of 或 code")
@@ -274,9 +274,6 @@ def build_receipt(
                     ticket_bits.append(f"行 as_of {shown}")
                     break
             ticket_rows = _index_by_code(ticket_frame)
-    if not meta_path.is_file():
-        ticket_bits.append("ticket_card_meta.json 缺失")
-    else:
         try:
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
@@ -286,13 +283,13 @@ def build_receipt(
         if meta_day != as_of:
             shown = "缺失" if meta_day is None else meta_day.isoformat()
             ticket_bits.append(f"meta as_of {shown}")
-    missing_ticket = [code for code in expected_ticket if code not in ticket_rows]
-    if missing_ticket:
-        ticket_bits.append("缺票卡行 " + ", ".join(missing_ticket))
-    if ticket_bits:
-        checks.append(_check("ticket_card", "fail", "; ".join(ticket_bits)))
-    else:
-        checks.append(_check("ticket_card", "ok", "as_of matches"))
+        missing_ticket = [code for code in expected_ticket if code not in ticket_rows]
+        if missing_ticket:
+            ticket_bits.append("缺票卡行 " + ", ".join(missing_ticket))
+        if ticket_bits:
+            checks.append(_check("ticket_card", "fail", "; ".join(ticket_bits)))
+        else:
+            checks.append(_check("ticket_card", "ok", "as_of matches"))
 
     trigger_name = f"next_day_triggers_{next_day.strftime('%Y%m%d')}.csv"
     trigger_path = listing_dir / trigger_name

@@ -70,28 +70,24 @@ echo "accept 4/8 regime validation"
 AS_OF="${AS_OF}" JOBS=8 PY="${PY}" SKIP_REBUILD=1 SKIP_HTML=1 \
   ./scripts/daily_regime_transition_validation.sh
 
-echo "accept 5/8 adaptive html"
-AS_OF="${AS_OF}" JOBS=8 PY="${PY}" \
-  ./scripts/daily_adaptive_stage_html.sh
-
-echo "accept 6/8 from_listing"
+echo "accept 5/8 from_listing"
 AS_OF="${AS_OF}" JOBS=8 PY="${PY}" \
   ./scripts/daily_adaptive_from_listing.sh
 
-echo "accept 7/8 hrp"
+echo "accept 6/8 hrp"
 "$PY" src/etf_daily/hrp/dendrogram.py \
   --lookback-days 252 \
   --asof-date "${AS_OF}" \
   --dist-t 0.8 \
   --output "${HRP_OUTPUT_DIR}/${AS_OF_TAG}/hrp_dendrogram_${AS_OF_TAG}_d080.html"
 
-echo "accept 8/8 next-day triggers"
+echo "accept 7/8 next-day triggers"
 PYTHONPATH="${PROJECT_ROOT}/src" "$PY" src/etf_daily/triggers/scan.py \
   --listing-dir "${PLOTLY_ROOT}/${AS_OF_TAG}_from_listing" \
   --as-of "${AS_OF}" \
   --next-day "${NEXT_DAY}" \
   --jobs 8
 
-echo "accept 9/9 morning receipt"
+echo "accept 8/8 morning receipt"
 PYTHONPATH="${PROJECT_ROOT}/src" "$PY" -m etf_daily.morning \
   --as-of "${AS_OF}" --next-day "${NEXT_DAY}"

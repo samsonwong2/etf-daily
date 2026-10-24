@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Generate adaptive HTML charts from each ETF's listing date through as-of.
 
-Reuses frozen ``hold_up`` configs from a source adaptive directory (no retrain
-by default). Each symbol gets its own plot window starting at the first Qlib
-bar (or ``--start-date`` if given). Production default includes multi-scale
-fair-path panels fig8–11 (1y / 6m / 3m / 1m); pass
-``--fair-path-extra-trail-years off`` to disable.
+Reuses frozen ``hold_up`` configs from the shared train cache (no retrain by
+default). A name missing from that cache is trained and added to it. Pass
+``--config-source-dir`` to copy configs from a specific directory instead.
+Each symbol gets its own plot window starting at the first Qlib bar (or
+``--start-date`` if given). Production default includes multi-scale fair-path
+panels fig8–11 (1y / 6m / 3m / 1m); pass ``--fair-path-extra-trail-years off``
+to disable.
 
 Examples::
 
@@ -108,25 +110,34 @@ def cache_tag(
     )
 
 
-def resolve_config_source(as_of: str, explicit: Path | None) -> Path:
+def resolve_config_source(
+    explicit: Path | None,
+    *,
+    train_cache_dir: Path | None,
+    cache_tag_value: str,
+) -> tuple[Path, bool]:
+    """Return ``(source_dir, allow_missing)``.
+
+    An explicit directory must exist and every code is required. With no
+    explicit directory, the source is ``train_cache_dir/<cache_tag>`` and a
+    missing code is trained later.
+    """
     if explicit is not None:
         p = explicit if explicit.is_absolute() else _PROJECT_ROOT / explicit
         if not p.exists():
             raise FileNotFoundError(f"config source missing: {p}")
-        return p
-    tag = pd.Timestamp(as_of).strftime("%Y%m%d")
-    candidates = [
-        PLOTLY_OUTPUTS_DIR / f"{tag}all_adaptive",
-        PLOTLY_OUTPUTS_DIR / "20260813all_adaptive",
-        PLOTLY_OUTPUTS_DIR / "20260812all_adaptive",
-    ]
-    for c in candidates:
-        if (c / "configs").is_dir():
-            return c
-    raise FileNotFoundError(
-        "no config source found; pass --config-source-dir "
-        "(expected */all_adaptive/configs)"
+        return p, False
+    if train_cache_dir is None:
+        raise FileNotFoundError(
+            "no config source; pass --config-source-dir "
+            "(shared train cache is disabled)"
+        )
+    root = (
+        train_cache_dir
+        if train_cache_dir.is_absolute()
+        else _PROJECT_ROOT / train_cache_dir
     )
+    return root / cache_tag_value, True
 
 
 def seed_out_dir(
@@ -137,12 +148,14 @@ def seed_out_dir(
     tag: str,
     train_cutoff: str,
     retrain: bool,
+    allow_missing: bool = False,
 ) -> None:
     """Copy frozen configs (+ train cache marker) so pool script reuses them.
 
     Always refresh from ``source`` when the source file exists. Skipping an
-    existing ``out_dir/configs/{code}.json`` left stale methods after
-    ``all_adaptive`` was retrained into the same html-out-dir.
+    existing ``out_dir/configs/{code}.json`` left stale methods after the
+    source was retrained into the same html-out-dir. ``allow_missing`` is for
+    the shared train cache: a code with no file yet is trained later.
     """
     cfg_dst = out_dir / "configs"
     cfg_dst.mkdir(parents=True, exist_ok=True)
@@ -182,11 +195,18 @@ def seed_out_dir(
             encoding="utf-8",
         )
     if missing and not retrain:
-        raise FileNotFoundError(
-            "missing frozen configs for: "
-            + ", ".join(missing)
-            + f" (looked in {src_cfg}; pass --retrain to build)"
-        )
+        if allow_missing:
+            print(
+                "[INFO] no frozen config yet for: "
+                + ", ".join(missing)
+                + " (will train)"
+            )
+        else:
+            raise FileNotFoundError(
+                "missing frozen configs for: "
+                + ", ".join(missing)
+                + f" (looked in {src_cfg}; pass --retrain to build)"
+            )
 
 
 def first_bar_date(pm, code: str, end_date: str) -> str:
@@ -279,7 +299,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--config-source-dir",
         type=Path,
         default=None,
-        help="adaptive dir with configs/ to reuse (default: {as_of}all_adaptive)",
+        help=(
+            "directory with configs/ to reuse "
+            "(default: shared train cache for this train cutoff)"
+        ),
     )
     p.add_argument(
         "--html-out-dir",
@@ -839,7 +862,17 @@ def main(argv: list[str] | None = None) -> int:
     if not codes:
         raise SystemExit("no codes to plot")
 
-    source = resolve_config_source(as_of, args.config_source_dir)
+    train_cache_dir: Path | None = None
+    if not args.no_train_cache:
+        if args.train_cache_dir is not None:
+            train_cache_dir = args.train_cache_dir
+        else:
+            train_cache_dir = DEFAULT_TRAIN_CACHE_DIR
+    source, allow_missing = resolve_config_source(
+        args.config_source_dir,
+        train_cache_dir=train_cache_dir,
+        cache_tag_value=tag,
+    )
     print(f"[INFO] as_of={as_of} end_date={end_date} train_cutoff={train_cutoff}")
     print(f"[INFO] start_date={'listing' if not start_override else start_override}")
     print(f"[INFO] config_source={source}")
@@ -864,6 +897,7 @@ def main(argv: list[str] | None = None) -> int:
         tag=tag,
         train_cutoff=train_cutoff,
         retrain=bool(args.retrain),
+        allow_missing=allow_missing,
     )
 
     pool = _load_pool_main()
@@ -889,13 +923,6 @@ def main(argv: list[str] | None = None) -> int:
             f"[INFO] listing_lookup codes={len(listing_lookup)} "
             f"(cache={len(persistent_lookup)} prev={len(prev_lookup)})"
         )
-
-    train_cache_dir: Path | None = None
-    if not args.no_train_cache:
-        if args.train_cache_dir is not None:
-            train_cache_dir = args.train_cache_dir
-        else:
-            train_cache_dir = DEFAULT_TRAIN_CACHE_DIR
 
     rt = pool.prepare_adaptive_runtime(
         end=end_date,

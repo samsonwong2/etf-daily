@@ -24,23 +24,23 @@ ln -sfn /path/to/regime_transition_model_cache runtime/decision_packs/regime_tra
 
 ## Daily order
 
-Run these in order. `adaptive` reads the validation directory written by `regime`. `listing` reads that day's `all_adaptive` directory written by `adaptive`. If that directory is missing, `listing` exits and prints the path. It does not run `adaptive` for you.
+Run these in order. `listing` reads frozen hold_up configs from `$PLOTLY_ROOT/_train_cache` and trains any pool name that cache does not have yet. It does not read `{YYYYMMDD}all_adaptive`.
 
-Only `listing` writes the HTML under `$PLOTLY_ROOT/20260924_from_listing`. The date comes from `--as-of 2026-09-24`. The other commands write fund data, a candidate pool, cluster tables, a regime signal shard, a different HTML directory, an HRP page, or a trigger table.
+Only `listing` writes the HTML under `$PLOTLY_ROOT/20260924_from_listing`. The date comes from `--as-of 2026-09-24`. The other commands write fund data, a candidate pool, cluster tables, a regime signal shard, an HRP page, or a trigger table.
 
 ```bash
 etf-daily etl
 etf-daily pool
 etf-daily cluster-review
 etf-daily regime --skip-rebuild --skip-html
-etf-daily adaptive --as-of 2026-10-13
-etf-daily listing --as-of 2026-10-13
-etf-daily hrp --as-of 2026-10-13
-etf-daily hrp --dist-t 0.8 --as-of 2026-10-13
+etf-daily listing --as-of 2026-10-23
+etf-daily hrp --as-of 2026-10-23
+etf-daily hrp --dist-t 0.8 --as-of 2026-10-23
+etf-daily rules7 --listing-dir "$PLOTLY_ROOT/20261023_from_listing"
 etf-daily triggers --listing-dir "$PLOTLY_ROOT/20260930_from_listing"
 etf-daily b1235 --listing-dir "$PLOTLY_ROOT/20260930_from_listing"
 etf-daily b1235-backtest --listing-dir "$PLOTLY_ROOT/20260930_from_listing"
-etf-daily rules7 --listing-dir "$PLOTLY_ROOT/20261013_from_listing"
+
 ```
 
 `listing` is incremental unless the shell is run with `INCREMENTAL=0`. Figure 12 runs unless `FIG12=0`.
@@ -71,15 +71,15 @@ Audits `cluster_mapping_selected.csv` against the full `cluster_mapping.csv` fro
 
 ### `etf-daily regime --skip-rebuild --skip-html`
 
-Updates the regime-transition signal shard for the month of `--as-of`. With no `--as-of`, that date is today, not `2026-09-24`. `--skip-rebuild` skips the reversal-metric rebuild. `--skip-html` skips the regime HTML, so nothing is written to `$PLOTLY_ROOT/{YYYYMMDD}all`. The shard lives under `runtime/decision_packs/20260720`. `adaptive` and `listing` both read it.
+Updates the regime-transition signal shard for the month of `--as-of`. With no `--as-of`, that date is today, not `2026-09-24`. `--skip-rebuild` skips the reversal-metric rebuild. `--skip-html` skips the regime HTML, so nothing is written to `$PLOTLY_ROOT/{YYYYMMDD}all`. The shard lives under `runtime/decision_packs/20260720`. `listing` reads it. Optional `adaptive` reads it too.
 
-### `etf-daily adaptive --as-of 2026-09-24`
+### `etf-daily adaptive --as-of 2026-09-24` (optional)
 
-Draws the adaptive-stage HTML for the cluster-selected names, ending 2026-09-24. HTML goes to `$PLOTLY_ROOT/20260924all_adaptive`. Training reuses `$PLOTLY_ROOT/_train_cache`. A ticket card is written into the same directory. This directory is the config source for `listing`. It is not the from-listing HTML folder.
+Not part of the daily order. Draws the adaptive-stage HTML for the cluster-selected names, ending 2026-09-24. HTML goes to `$PLOTLY_ROOT/20260924all_adaptive`. Training reuses `$PLOTLY_ROOT/_train_cache`. A ticket card is written into the same directory. `listing` does not read this directory. Run this when you want that HTML.
 
 ### `etf-daily listing --as-of 2026-09-24`
 
-Draws one HTML per name from listing date through 2026-09-24. It first requires `$PLOTLY_ROOT/20260924all_adaptive`. If that directory is missing, it exits and prints the path. HTML goes to `$PLOTLY_ROOT/20260924_from_listing`. Incremental mode appends each missing session after the newest older `*_from_listing` directory under `PLOTLY_ROOT`. Figure 12 is added unless `FIG12=0`.
+Draws one HTML per name from listing date through 2026-09-24. Frozen methods come from `$PLOTLY_ROOT/_train_cache`. A name missing from that cache is trained and added to it; names already in the cache keep their method. HTML goes to `$PLOTLY_ROOT/20260924_from_listing`. Incremental mode appends each missing session after the newest older `*_from_listing` directory under `PLOTLY_ROOT`. Figure 12 is added unless `FIG12=0`.
 
 ### `etf-daily hrp`
 
@@ -128,21 +128,20 @@ Run these during the session, while Qlib still has no bar for today. `--as-of` d
 
 ```bash
 etf-daily regime --skip-html --intraday
-etf-daily adaptive --intraday
 etf-daily listing --intraday
-etf-daily hrp --dist-t 0.8 --as-of 2026-10-13
-etf-daily rules7 --listing-dir "$PLOTLY_ROOT/20261013_from_listing"
+etf-daily hrp --dist-t 0.8 --as-of 2026-10-23
+etf-daily rules7 --listing-dir "$PLOTLY_ROOT/20261023_from_listing"
 ```
 
-Run them in that order. `listing` reads today's `$PLOTLY_ROOT/{YYYYMMDD}all_adaptive` from `adaptive`. If that directory is missing, `listing` exits and prints the path.
+Run them in that order. `listing` uses the same shared train cache as the end-of-day command. It does not need `adaptive --intraday`.
 
 ### `etf-daily regime --skip-html --intraday`
 
 Fetches a frozen AkShare snapshot, then writes today's signal shard and reversal labels into `runtime/decision_packs/intraday/{YYYYMMDD}/{HHMMSS}/`. `HHMMSS` is the time the command starts. The formal shard under `runtime/decision_packs/20260720` stays as it was. `--skip-html` skips the regime HTML. Leave off `--skip-rebuild`: the reversal labels are part of this pack. `listing` later picks the newest directory under that day which contains both `signals_oos.csv` and `live_snapshot.csv`.
 
-### `etf-daily adaptive --intraday`
+### `etf-daily adaptive --intraday` (optional)
 
-Draws the adaptive-stage HTML through today. It copies configs from the newest `$PLOTLY_ROOT/{YYYYMMDD}all_adaptive` whose date is before today, and it does not retrain. It takes a new AkShare snapshot for the chart. HTML goes to `$PLOTLY_ROOT/{YYYYMMDD}all_adaptive`. That directory is the config source for the intraday `listing` command.
+Not required before `listing --intraday`. Draws the adaptive-stage HTML through today. It copies configs from the newest `$PLOTLY_ROOT/{YYYYMMDD}all_adaptive` whose date is before today, and it does not retrain. It takes a new AkShare snapshot for the chart. HTML goes to `$PLOTLY_ROOT/{YYYYMMDD}all_adaptive`.
 
 ### `etf-daily listing --intraday`
 

@@ -211,13 +211,28 @@ def test_row_as_of_mismatch(tmp_path: Path):
     assert "行 as_of" in detail
 
 
-def test_missing_meta_stops(tmp_path: Path):
+def test_missing_meta_is_skipped(tmp_path: Path):
     world = _world(tmp_path)
     (world["adaptive"] / "ticket_card_meta.json").unlink()
-    rc, receipt, _page = _run(world)
-    assert rc == 1
-    detail = next(item["detail"] for item in receipt["checks"] if item["id"] == "ticket_card")
-    assert "ticket_card_meta.json 缺失" in detail
+    rc, receipt, page = _run(world)
+    assert rc == 0
+    assert receipt["label"] == "TODAY"
+    item = next(item for item in receipt["checks"] if item["id"] == "ticket_card")
+    assert item["status"] == "skip"
+    assert item["detail"] == "无票卡，候选名单为空"
+    assert "<table>" not in page
+
+
+def test_absent_ticket_card_is_skipped(tmp_path: Path):
+    world = _world(tmp_path)
+    (world["adaptive"] / "ticket_card.csv").unlink()
+    (world["adaptive"] / "ticket_card_meta.json").unlink()
+    rc, receipt, page = _run(world)
+    assert rc == 0
+    item = next(item for item in receipt["checks"] if item["id"] == "ticket_card")
+    assert item["status"] == "skip"
+    assert "无票卡" in item["detail"]
+    assert "<table>" not in page
 
 
 def test_missing_ticket_row_for_universe_code(tmp_path: Path):

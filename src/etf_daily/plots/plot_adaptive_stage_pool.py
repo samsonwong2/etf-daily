@@ -1009,6 +1009,170 @@ def _copy_train_cache(
         shutil.copy2(src_meta, dst_meta)
 
 
+def missing_config_codes(codes: list[str], cfg_dir: Path) -> tuple[list[str], list[str]]:
+    """Split ``codes`` into those with a config file and those without."""
+    present = [c for c in codes if (cfg_dir / f"{c}.json").is_file()]
+    have = set(present)
+    missing = [c for c in codes if c not in have]
+    return present, missing
+
+
+def train_missing_hold_up_configs(
+    *,
+    missing: list[str],
+    existing_configs: dict[str, dict],
+    pm,
+    end: str,
+    train_cutoff: str,
+    ev,
+    score_mode: dict[str, Any],
+    score_mode_name: str,
+    regime_mode: str,
+    trade_mode: str,
+    k: float,
+    fail_fast: bool,
+) -> tuple[dict[str, dict], list[dict]]:
+    """Train hold_up configs for codes absent from the shared cache.
+
+    ``existing_configs`` is read only, so a failed train uses their modal
+    method. Returned configs cover ``missing`` and nothing else.
+    """
+    if trade_mode != TRADE_MODE_HOLD_UP:
+        raise ValueError("partial train cache reuse is hold_up only")
+    train_errors: list[dict] = []
+    train_outs: dict[str, dict] = {}
+    for i, code in enumerate(missing, 1):
+        try:
+            ohlcv = _load_ohlcv(pm, code, end, train_cutoff=train_cutoff)
+            tout = train_one_symbol(
+                code=code,
+                ohlcv=ohlcv,
+                train_cutoff=train_cutoff,
+                ev=ev,
+                score_mode=score_mode,
+                regime_mode=regime_mode,
+                trade_mode=trade_mode,
+            )
+            train_outs[code] = tout
+        except Exception as e:
+            train_errors.append(dict(code=code, phase="train", error=str(e)))
+            print(f"  [{i}/{len(missing)}] FAIL train {code}: {e}")
+            if fail_fast:
+                raise
+    prior_df = pd.DataFrame(
+        columns=["stage", "buy", "exit", "prior_score", "n_symbols", "mean_n"]
+    )
+    methods = [
+        cfg.get("method") for cfg in existing_configs.values() if cfg.get("method")
+    ]
+    methods.extend(t["method"] for t in train_outs.values() if t.get("method"))
+    modal_method = (
+        max(set(methods), key=methods.count) if methods else FIXED_HYBRID_RULES["method"]
+    )
+    new_configs: dict[str, dict] = {}
+    for code in missing:
+        if code not in train_outs:
+            fake = dict(
+                code=code,
+                skipped_train=True,
+                method=None,
+                method_scores={},
+                rule_rows=[],
+                train_end=None,
+                train_cutoff=train_cutoff,
+                train_bars=0,
+                regime_mode=regime_mode,
+                trade_mode=trade_mode,
+            )
+            cfg = select_rules_bayes(
+                code=code,
+                train_out=fake,
+                prior_df=prior_df,
+                k=k,
+                score_mode=score_mode,
+                trade_mode=trade_mode,
+            )
+            cfg["method"] = modal_method
+            cfg["method_params"] = {}
+        else:
+            cfg = select_rules_bayes(
+                code=code,
+                train_out=train_outs[code],
+                prior_df=prior_df,
+                k=k,
+                score_mode=score_mode,
+                trade_mode=trade_mode,
+            )
+        cfg["score_mode"] = score_mode_name
+        cfg["regime_mode"] = regime_mode
+        cfg["trade_mode"] = trade_mode
+        cfg["truth_version"] = TRUTH_VERSION
+        new_configs[code] = cfg
+    return new_configs, train_errors
+
+
+def _publish_train_cache(
+    *,
+    cache_meta: Path,
+    cfg_dir: Path,
+    prior_path: Path,
+    codes: list[str],
+    train_cutoff: str,
+    prior_k: float,
+    score_mode_name: str,
+    regime_mode: str,
+    trade_mode: str,
+    shared_cfg_dir: Path | None,
+    shared_meta: Path | None,
+    shared_prior: Path | None,
+    shared_root: Path | None,
+) -> None:
+    """Write the local cache marker and merge configs into the shared cache."""
+    cache_meta.write_text(
+        json.dumps(
+            dict(
+                train_cutoff=train_cutoff,
+                n_codes=len(codes),
+                prior_k=prior_k,
+                score_mode=score_mode_name,
+                regime_mode=regime_mode,
+                trade_mode=trade_mode,
+                truth_version=TRUTH_VERSION,
+                method_impl_version=METHOD_IMPL_VERSION,
+            ),
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    if shared_cfg_dir is None or shared_meta is None or shared_prior is None:
+        return
+    shared_cfg_dir.mkdir(parents=True, exist_ok=True)
+    for code in codes:
+        src = cfg_dir / f"{code}.json"
+        if src.exists():
+            shutil.copy2(src, shared_cfg_dir / f"{code}.json")
+    if prior_path.exists():
+        shutil.copy2(prior_path, shared_prior)
+    n_shared = len(list(shared_cfg_dir.glob("*.json")))
+    shared_meta.write_text(
+        json.dumps(
+            dict(
+                train_cutoff=train_cutoff,
+                n_codes=n_shared,
+                prior_k=prior_k,
+                score_mode=score_mode_name,
+                regime_mode=regime_mode,
+                trade_mode=trade_mode,
+                truth_version=TRUTH_VERSION,
+                method_impl_version=METHOD_IMPL_VERSION,
+            ),
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    print(f"[cache] wrote shared train cache {shared_root} (n={n_shared})")
+
+
 def prepare_adaptive_runtime(
     *,
     end: str,
@@ -1164,11 +1328,75 @@ def prepare_adaptive_runtime(
         shared_hit = True
     configs: dict[str, dict] = {}
     train_errors: list[dict] = []
+    partial_missing: list[str] = []
+    if (
+        (not reuse)
+        and (not retrain)
+        and trade_mode == TRADE_MODE_HOLD_UP
+        and shared_cfg_dir is not None
+        and shared_meta is not None
+        and shared_meta.exists()
+    ):
+        present, missing = missing_config_codes(codes, shared_cfg_dir)
+        if present and missing:
+            for c in present:
+                shutil.copy2(shared_cfg_dir / f"{c}.json", cfg_dir / f"{c}.json")
+                configs[c] = json.loads(
+                    (cfg_dir / f"{c}.json").read_text(encoding="utf-8")
+                )
+            if shared_prior is not None and shared_prior.exists():
+                shutil.copy2(shared_prior, prior_path)
+            partial_missing = missing
+            print(
+                f"[cache] partial reuse {len(present)} configs for {cache_tag}; "
+                f"train missing {', '.join(missing)}"
+            )
     if reuse:
         src = "shared" if shared_hit else "local"
         print(f"[cache] reuse configs for {cache_tag} ({src})")
         for c in codes:
             configs[c] = json.loads((cfg_dir / f"{c}.json").read_text(encoding="utf-8"))
+    elif partial_missing:
+        print("[pass1] train missing regime methods")
+        new_cfgs, new_errors = train_missing_hold_up_configs(
+            missing=partial_missing,
+            existing_configs=configs,
+            pm=pm,
+            end=end,
+            train_cutoff=train_cutoff,
+            ev=ev,
+            score_mode=score_mode,
+            score_mode_name=score_mode_name,
+            regime_mode=regime_mode,
+            trade_mode=trade_mode,
+            k=k,
+            fail_fast=fail_fast,
+        )
+        train_errors.extend(new_errors)
+        for code, cfg in new_cfgs.items():
+            configs[code] = cfg
+            (cfg_dir / f"{code}.json").write_text(
+                json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+        if not prior_path.exists():
+            pd.DataFrame(
+                columns=["stage", "buy", "exit", "prior_score", "n_symbols", "mean_n"]
+            ).to_csv(prior_path, index=False, encoding="utf-8-sig")
+        _publish_train_cache(
+            cache_meta=cache_meta,
+            cfg_dir=cfg_dir,
+            prior_path=prior_path,
+            codes=codes,
+            train_cutoff=train_cutoff,
+            prior_k=k,
+            score_mode_name=score_mode_name,
+            regime_mode=regime_mode,
+            trade_mode=trade_mode,
+            shared_cfg_dir=shared_cfg_dir,
+            shared_meta=shared_meta,
+            shared_prior=shared_prior,
+            shared_root=shared_root,
+        )
     else:
         print("[pass1] train regime methods")
         all_rule_rows: list[dict] = []
@@ -1246,49 +1474,21 @@ def prepare_adaptive_runtime(
             (cfg_dir / f"{code}.json").write_text(
                 json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8"
             )
-        cache_meta.write_text(
-            json.dumps(
-                dict(
-                    train_cutoff=train_cutoff,
-                    n_codes=len(codes),
-                    prior_k=k,
-                    score_mode=score_mode_name,
-                    regime_mode=regime_mode,
-                    trade_mode=trade_mode,
-                    truth_version=TRUTH_VERSION,
-                    method_impl_version=METHOD_IMPL_VERSION,
-                ),
-                indent=2,
-            ),
-            encoding="utf-8",
+        _publish_train_cache(
+            cache_meta=cache_meta,
+            cfg_dir=cfg_dir,
+            prior_path=prior_path,
+            codes=codes,
+            train_cutoff=train_cutoff,
+            prior_k=k,
+            score_mode_name=score_mode_name,
+            regime_mode=regime_mode,
+            trade_mode=trade_mode,
+            shared_cfg_dir=shared_cfg_dir,
+            shared_meta=shared_meta,
+            shared_prior=shared_prior,
+            shared_root=shared_root,
         )
-        if shared_cfg_dir is not None and shared_meta is not None and shared_prior is not None:
-            shared_cfg_dir.mkdir(parents=True, exist_ok=True)
-            for code in codes:
-                src = cfg_dir / f"{code}.json"
-                if src.exists():
-                    shutil.copy2(src, shared_cfg_dir / f"{code}.json")
-            if prior_path.exists():
-                shutil.copy2(prior_path, shared_prior)
-            # Meta reflects union of configs present under the shared tag.
-            n_shared = len(list(shared_cfg_dir.glob("*.json")))
-            shared_meta.write_text(
-                json.dumps(
-                    dict(
-                        train_cutoff=train_cutoff,
-                        n_codes=n_shared,
-                        prior_k=k,
-                        score_mode=score_mode_name,
-                        regime_mode=regime_mode,
-                        trade_mode=trade_mode,
-                        truth_version=TRUTH_VERSION,
-                        method_impl_version=METHOD_IMPL_VERSION,
-                    ),
-                    indent=2,
-                ),
-                encoding="utf-8",
-            )
-            print(f"[cache] wrote shared train cache {shared_root} (n={n_shared})")
 
     _ = start
     return dict(
