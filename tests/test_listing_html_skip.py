@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from etf_daily.lib.incremental_from_listing import end_ohlc_matches
+from etf_daily.lib.incremental_from_listing import end_ohlc_matches, overlap_ohlc_matches
 from etf_daily.plots.plot_adaptive_from_listing import (
     listing_codes_to_render,
     listing_page_exists,
@@ -81,3 +81,22 @@ def test_end_ohlc_matches_keeps_page_until_official_bar_exists():
     assert end_ohlc_matches(html, official, "2026-10-22", tol=1e-5) is False
     html.loc[pd.Timestamp("2026-10-22")] = [1.563, 1.58, 1.561, 1.57]
     assert end_ohlc_matches(html, official, "2026-10-22", tol=1e-5) is True
+
+
+def test_overlap_ohlc_matches_ignores_provisional_tail():
+    html = pd.DataFrame(
+        {
+            "$open": [1.277, 1.266],
+            "$high": [1.280, 1.269],
+            "$low": [1.275, 1.264],
+            "$close": [1.275, 1.268],
+        },
+        index=pd.to_datetime(["2026-10-22", "2026-10-23"]),
+    )
+    official = pd.DataFrame(
+        {"$open": [1.286], "$high": [1.288], "$low": [1.276], "$close": [1.278]},
+        index=pd.to_datetime(["2026-10-22"]),
+    )
+    assert overlap_ohlc_matches(html, official, tol=1e-5) is False
+    html.loc[pd.Timestamp("2026-10-22")] = [1.286, 1.288, 1.276, 1.278]
+    assert overlap_ohlc_matches(html, official, tol=1e-5) is True

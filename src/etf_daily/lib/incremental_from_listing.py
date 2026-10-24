@@ -147,6 +147,44 @@ def end_ohlc_matches(
     return True
 
 
+def _indexed_ohlc(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame is None or frame.empty:
+        return pd.DataFrame()
+    work = frame.copy()
+    if "datetime" in work.columns:
+        idx = pd.to_datetime(work["datetime"]).dt.normalize()
+        work = work.set_index(idx)
+    else:
+        work.index = pd.DatetimeIndex(pd.to_datetime(work.index)).normalize()
+    work = work[~work.index.duplicated(keep="last")].sort_index()
+    cols = [c for c in ("$open", "$high", "$low", "$close") if c in work.columns]
+    return work[cols]
+
+
+def overlap_ohlc_matches(
+    html_ohlcv: pd.DataFrame,
+    official_ohlcv: pd.DataFrame,
+    *,
+    tol: float,
+) -> bool:
+    """Whether every shared session agrees.
+
+    A provisional bar past the official calendar is ignored. Empty official
+    data is not a mismatch. Any shared day whose OHLC differs is.
+    """
+    html = _indexed_ohlc(html_ohlcv)
+    official = _indexed_ohlc(official_ohlcv)
+    if html.empty or official.empty:
+        return True
+    common = html.index.intersection(official.index)
+    if len(common) == 0:
+        return True
+    for day in common:
+        if not end_ohlc_matches(html, official, str(pd.Timestamp(day).date()), tol=tol):
+            return False
+    return True
+
+
 def stale_end_bar_codes(
     pages: dict[str, Path],
     official_ohlcv_for,
@@ -154,10 +192,12 @@ def stale_end_bar_codes(
     *,
     tol: float,
 ) -> set[str]:
-    """Codes whose saved HTML bar on ``end`` is not the official OHLCV.
+    """Codes whose saved HTML OHLC disagrees with the official series.
 
     ``official_ohlcv_for(code)`` returns the frame the redraw would plot.
-    Unreadable pages are stale so the next pass replaces them.
+    Comparison covers the whole overlap, not only ``end``, so a shifted
+    history under a newer provisional bar is still redrawn. Unreadable pages
+    are stale so the next pass replaces them.
     """
     from etf_daily.lib.fair_path_band_signals import load_ohlcv_from_regime_html
 
@@ -169,12 +209,14 @@ def stale_end_bar_codes(
         try:
             _, html_ohlcv = load_ohlcv_from_regime_html(page)
             official = official_ohlcv_for(code)
-            if not end_ohlc_matches(html_ohlcv, official, end, tol=tol):
+            if not overlap_ohlc_matches(html_ohlcv, official, tol=tol):
                 stale.add(str(code).upper())
         except Exception as exc:  # noqa: BLE001
             print(f"[WARN] {code}: cannot compare {end} bar ({exc}); redraw")
             stale.add(str(code).upper())
     return stale
+
+
 
 
 def overlap_close_ok(
