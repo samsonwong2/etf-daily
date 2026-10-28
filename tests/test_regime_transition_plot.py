@@ -828,7 +828,9 @@ def test_build_candle_volume_vol_figure_has_three_rows_and_vol_traces():
 
     mod_path = (
         Path(__file__).resolve().parents[1]
-        / "scripts"
+        / "src"
+        / "etf_daily"
+        / "plots"
         / "plot_regime_transition_example.py"
     )
     spec = importlib.util.spec_from_file_location("plot_regime_example_mod", mod_path)
@@ -1175,7 +1177,7 @@ def test_fig7_trail_uses_fair_path_ohlcv_history_not_plot_window_only():
     )
     own_g = float(finite_long[-1])
     trail_y = int(round(float(mod.FAIR_PATH_LOG_TREND_TRAIL_YEARS)))
-    path_prefix = f"公平路径(自有log趋势·{trail_y}年 g≈{own_g:.1%}"
+    path_prefix = f"公平路径(自有log趋势·{trail_y}年 年化外推g≈{own_g:.1%}"
     names = {getattr(tr, "name", None) for tr in fig.data}
     path_names = [
         n
@@ -1732,7 +1734,7 @@ def test_build_candle_volume_vol_figure_optional_need_row():
     finite_g = finite_g[np.isfinite(finite_g)]
     own_g = float(finite_g[-1])
     trail_y = int(round(float(mod.FAIR_PATH_LOG_TREND_TRAIL_YEARS)))
-    path_prefix = f"公平路径(自有log趋势·{trail_y}年 g≈{own_g:.1%}"
+    path_prefix = f"公平路径(自有log趋势·{trail_y}年 年化外推g≈{own_g:.1%}"
     path_names7 = [
         n
         for n in names7
@@ -1873,7 +1875,9 @@ def test_trend_state_series_and_summary():
 
     mod_path = (
         Path(__file__).resolve().parents[1]
-        / "scripts"
+        / "src"
+        / "etf_daily"
+        / "plots"
         / "plot_regime_transition_example.py"
     )
     spec = importlib.util.spec_from_file_location("plot_regime_example_mod", mod_path)
@@ -1917,7 +1921,9 @@ def test_candle_hover_includes_trend_state():
 
     mod_path = (
         Path(__file__).resolve().parents[1]
-        / "scripts"
+        / "src"
+        / "etf_daily"
+        / "plots"
         / "plot_regime_transition_example.py"
     )
     spec = importlib.util.spec_from_file_location("plot_regime_example_mod", mod_path)
@@ -1956,7 +1962,9 @@ def _load_plot_example_mod():
 
     mod_path = (
         Path(__file__).resolve().parents[1]
-        / "scripts"
+        / "src"
+        / "etf_daily"
+        / "plots"
         / "plot_regime_transition_example.py"
     )
     spec = importlib.util.spec_from_file_location("plot_regime_example_mod", mod_path)
@@ -2092,9 +2100,9 @@ def test_plot_ohlcv_qfq_removes_exdiv_cliff():
     from etf_daily.pipeline.price_adjustments import auto_qfq_adjust_long_frame
 
     dates = pd.bdate_range("2026-07-10", periods=6)
-    # Mimic SZ159320-style split: ~1.92 → 0.626 overnight.
+    # Mimic SZ159320-style 3-for-1: 1.924 → open on 1/3, close 0.626 (about −2.4% after the split).
     close = np.array([1.90, 1.91, 1.924, 0.626, 0.604, 0.576], dtype=float)
-    factor = 0.626 / 1.924
+    factor = 1.0 / 3.0
     df = pd.DataFrame(
         {
             "instrument": ["SZ159320"] * len(dates),
@@ -2115,11 +2123,14 @@ def test_plot_ohlcv_qfq_removes_exdiv_cliff():
         extra_price_cols=["$open", "$high", "$low"],
     )
     assert not records.empty
+    assert bool(records.iloc[0]["snapped"])
+    assert records.iloc[0]["split_ratio"] == pytest.approx(factor)
     rets = adj["$close"].pct_change().to_numpy()
     assert np.nanmax(np.abs(rets)) < 0.25
-    # Pre-split closes are scaled toward post-split level.
+    # Pre-split closes use the round 1/3, so the ex-day keeps its own move.
     assert adj["$close"].iloc[2] == pytest.approx(1.924 * factor, rel=1e-6)
     assert adj["$open"].iloc[2] == pytest.approx(df["$open"].iloc[2] * factor, rel=1e-6)
+    assert adj["$close"].iloc[3] / adj["$close"].iloc[2] - 1 == pytest.approx(0.626 / (1.924 * factor) - 1)
 
 
 def _synthetic_trail_plot_df(n_plot: int = 80, n_hist: int = 600):

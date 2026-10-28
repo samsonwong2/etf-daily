@@ -13,7 +13,6 @@
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import sys
 from pathlib import Path
 from typing import Any
@@ -33,11 +32,8 @@ LAB_TO_I = {k: i for i, k in enumerate(LABS)}
 
 
 def _load_plot_mod():
-    path = _PROJECT_ROOT / "decision_pack" / "scripts" / "plot_regime_transition_example.py"
-    spec = importlib.util.spec_from_file_location("plot_causal_regime", path)
-    assert spec and spec.loader
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    import etf_daily.plots.plot_regime_transition_example as mod
+
     return mod
 
 

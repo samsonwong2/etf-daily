@@ -32,6 +32,7 @@ from etf_daily.lib.incremental_from_listing import (
     extract_layout,
     find_listing_html,
     overlap_close_ok,
+    stamp_fair_path_html,
     sync_fig1_regime_shapes,
     try_incremental_html,
 )
@@ -303,6 +304,7 @@ def test_try_incremental_html_roundtrip_last_two(tmp_path: Path):
     prev_dir.mkdir()
     stripped = prev_dir / src.name
     write_adaptive_html(go.Figure(data=traces, layout=layout), stripped)
+    stamp_fair_path_html(stripped)
 
     close_full, ohlcv = load_ohlcv_from_regime_html(src)
     df = ohlcv.reset_index()

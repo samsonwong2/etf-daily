@@ -22,6 +22,9 @@ once on the first ``fit_bars`` observations and frozen afterwards.
 """
 from __future__ import annotations
 
+import bisect
+import hashlib
+from collections import OrderedDict
 from typing import Mapping
 
 import numpy as np
@@ -159,6 +162,54 @@ def ewma_residual_sigma(
     return pd.Series(out, index=residual.index, dtype=float)
 
 
+def linear_quantile_sorted(sorted_vals: list[float], q: float) -> float:
+    """Hyndman–Fan type 7, bitwise-equal to ``numpy.quantile(..., method='linear')``.
+
+    ``t >= 0.5`` uses the same compensated lerp as NumPy's ``_lerp``.
+    """
+    n = len(sorted_vals)
+    if n <= 0:
+        return float("nan")
+    if n == 1:
+        return float(sorted_vals[0])
+    virtual = (np.float64(n) - np.float64(1.0)) * np.float64(q)
+    lo = int(np.floor(virtual))
+    hi = int(np.ceil(virtual))
+    if lo == hi:
+        return float(sorted_vals[lo])
+    t = np.float64(virtual - np.float64(lo))
+    a = np.float64(sorted_vals[lo])
+    b = np.float64(sorted_vals[hi])
+    diff = b - a
+    out = a + diff * t
+    if t >= np.float64(0.5):
+        out = b - diff * (np.float64(1.0) - t)
+    return float(out)
+
+
+_EWMA_CACHE: OrderedDict[tuple, tuple[np.ndarray, np.ndarray, float]] = OrderedDict()
+_EWMA_CACHE_MAX = 64
+
+
+def _f64_digest(arr: np.ndarray) -> bytes:
+    return hashlib.sha1(np.ascontiguousarray(arr, dtype=np.float64).tobytes()).digest()
+
+
+def _cache_get(cache: OrderedDict, key: tuple):
+    hit = cache.get(key)
+    if hit is None:
+        return None
+    cache.move_to_end(key)
+    return hit
+
+
+def _cache_put(cache: OrderedDict, key: tuple, value, *, limit: int) -> None:
+    cache[key] = value
+    cache.move_to_end(key)
+    while len(cache) > limit:
+        cache.popitem(last=False)
+
+
 def ewma_scaled_envelope(
     path: pd.Series,
     close: pd.Series,
@@ -188,11 +239,24 @@ def ewma_scaled_envelope(
     path_arr = p.to_numpy(dtype=float)
     r_arr = r.to_numpy(dtype=float)
     s_arr = sigma.to_numpy(dtype=float)
+    cache_key = (
+        "ewma",
+        _f64_digest(path_arr),
+        _f64_digest(r_arr),
+        float(qq),
+        int(min_b),
+        float(lam),
+    )
+    cached = _cache_get(_EWMA_CACHE, cache_key)
+    if cached is not None:
+        upper.iloc[:] = cached[0]
+        lower.iloc[:] = cached[1]
+        return upper, lower, float(cached[2])
     n = len(path_arr)
     upper_arr = np.full(n, np.nan, dtype=float)
     lower_arr = np.full(n, np.nan, dtype=float)
     delta_arr = np.full(n, np.nan, dtype=float)
-    abs_z: list[float] = []
+    sorted_z: list[float] = []
     for t in range(n):
         pt = float(path_arr[t])
         rt = float(r_arr[t])
@@ -202,10 +266,10 @@ def ewma_scaled_envelope(
         if ok_s and np.isfinite(rt):
             zt = rt / st
             if np.isfinite(zt):
-                abs_z.append(abs(zt))
-        if len(abs_z) < min_b or not (ok_p and ok_s):
+                bisect.insort(sorted_z, abs(zt))
+        if len(sorted_z) < min_b or not (ok_p and ok_s):
             continue
-        delta_t = float(np.quantile(np.asarray(abs_z, dtype=float), qq))
+        delta_t = linear_quantile_sorted(sorted_z, qq)
         if not np.isfinite(delta_t) or delta_t < 0:
             continue
         delta_arr[t] = delta_t
@@ -216,6 +280,12 @@ def ewma_scaled_envelope(
     lower.iloc[:] = lower_arr
     finite_d = delta_arr[np.isfinite(delta_arr)]
     delta_asof = float(finite_d[-1]) if finite_d.size else float("nan")
+    _cache_put(
+        _EWMA_CACHE,
+        cache_key,
+        (upper_arr.copy(), lower_arr.copy(), delta_asof),
+        limit=_EWMA_CACHE_MAX,
+    )
     return upper, lower, delta_asof
 
 

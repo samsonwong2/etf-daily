@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Replay per-symbol early warnings across ablation dates.
 
-After --all-holdings, compare strategies vs buy-and-hold with:
-  compare_replay_strategies.py --replay-dir <out> --live-holdings <csv>
+Strategy comparison vs buy-and-hold lives in etf_daily.lib.replay_simulation.
 """
 from __future__ import annotations
 

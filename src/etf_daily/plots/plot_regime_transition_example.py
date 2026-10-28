@@ -7,10 +7,13 @@ Optional ``--code`` limits the run to one symbol.
 from __future__ import annotations
 
 import argparse
+import bisect
+import hashlib
 import importlib.util
 import os
 import re
 import sys
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
@@ -178,28 +181,47 @@ def _normalize_extra_trail_years(
 def _trail_envelope_policy(trail_years: float) -> str:
     """Which rails to draw on a log-trend trail panel.
 
-    fig7 (2y) / fig8 (1y) / fig9 (6m) / fig10 (3m): expanding P95 plus
-    EWMA overlay. Other horizons (fig11 1m) keep expanding P95.
-    Does not change hold_up or production checklist defaults.
+    Policy comes from ``FIG_PANELS`` / ``EWMA_OVERLAY_YEARS``: fig7–fig10
+    get expanding P95 plus an EWMA overlay; fig11 and any other horizon
+    keep expanding P95. Does not change hold_up or checklist defaults.
     """
+    from etf_daily.lib.fair_path_band_signals import EWMA_OVERLAY_YEARS, FIG_PANELS
+
     y = float(trail_years)
     if not np.isfinite(y):
         return "expanding"
-    if (
-        abs(y - 2.0) < 1e-9
-        or abs(y - 1.0) < 1e-9
-        or abs(y - 0.5) < 1e-9
-        or abs(y - 0.25) < 1e-9
-    ):
-        return "expanding_plus_ewma"
+    for _key, years, _label in FIG_PANELS:
+        if abs(y - float(years)) >= 1e-9:
+            continue
+        if any(abs(y - float(ey)) < 1e-9 for ey in EWMA_OVERLAY_YEARS):
+            return "expanding_plus_ewma"
+        return "expanding"
     return "expanding"
 
 
-def _ewma_scaled_envelope(path: pd.Series, close: pd.Series):
-    """Lazy import so this plot module does not import research at load time."""
-    from etf_daily.lib.fair_path_research import ewma_scaled_envelope
+def rail_min_bars(trail_years: float | None = None) -> int:
+    """Warmup for P95 rails, EWMA rails, and hover percentiles.
 
-    return ewma_scaled_envelope(path, close)
+    Always ``FAIR_PATH_LOG_TREND_MIN_BARS`` (63), including fig11.
+    Path OLS still uses ``_trail_fit_min_bars``, which clamps a 1-month
+    window to 21 bars so the path itself can fit. ``trail_years`` is
+    accepted so callers pass the panel horizon explicitly.
+    """
+    _ = trail_years
+    return int(FAIR_PATH_LOG_TREND_MIN_BARS)
+
+
+def _ewma_scaled_envelope(
+    path: pd.Series,
+    close: pd.Series,
+    *,
+    min_bars: int | None = None,
+):
+    """Lazy import so this plot module does not import research at load time."""
+    from etf_daily.lib.fair_path_research import DEFAULT_MIN_BARS, ewma_scaled_envelope
+
+    mb = int(DEFAULT_MIN_BARS) if min_bars is None else max(2, int(min_bars))
+    return ewma_scaled_envelope(path, close, min_bars=mb)
 
 
 def _daily_half_width_pct(upper: pd.Series, path: pd.Series) -> np.ndarray:
@@ -354,6 +376,49 @@ def _trail_fit_min_bars(
     return max(2, min(base, trail_bars))
 
 
+def _trail_bar_count(trail_years: float, *, trading_days_per_year: float = 252.0) -> int:
+    y = float(trail_years)
+    tdy = float(trading_days_per_year)
+    if not np.isfinite(y) or y <= 0 or not np.isfinite(tdy) or tdy <= 0:
+        return 0
+    return int(round(y * tdy))
+
+
+def _short_window_note(n_bars: int, trail_years: float) -> str:
+    """Legend note when the listing is shorter than the labeled trail."""
+    need = _trail_bar_count(trail_years)
+    n = int(n_bars)
+    if need > 0 and n < need:
+        return f"窗口不足{n}根"
+    return ""
+
+
+def _window_cum_return(close: pd.Series, trail_years: float) -> pd.Series:
+    """Close-to-close return inside the same trailing window the OLS uses.
+
+    Not annualized. ``g`` stays the annualized extrapolation.
+    """
+    y = pd.to_numeric(close, errors="coerce")
+    arr = y.to_numpy(dtype=float)
+    n = len(arr)
+    out = np.full(n, np.nan, dtype=float)
+    trail = _trail_bar_count(trail_years)
+    for t in range(n):
+        start = 0
+        if trail > 0 and (t + 1) >= trail:
+            start = t + 1 - trail
+        sl = arr[start : t + 1]
+        ok = np.isfinite(sl) & (sl > 0)
+        if int(ok.sum()) < 2:
+            continue
+        idx = np.flatnonzero(ok)
+        a = float(sl[int(idx[0])])
+        b = float(sl[int(idx[-1])])
+        if a > 0:
+            out[t] = b / a - 1.0
+    return pd.Series(out, index=y.index, dtype=float)
+
+
 def _asof_close_series(ohlcv: pd.DataFrame) -> pd.Series:
     """Normalized as_of-indexed close series (last wins on duplicate dates)."""
     dt = pd.to_datetime(ohlcv["datetime"]).dt.normalize()
@@ -469,17 +534,15 @@ def _add_own_log_trail_kline_row(
     ):
         peers.append((float(dual_peer_years), dual_peer_g))
 
-    path_name = f"公平路径(自有log趋势·{hz} g≈{own_g:.1%}"
+    path_name = f"公平路径(自有log趋势·{hz} 年化外推g≈{own_g:.1%}"
     for py, pg in peers:
         path_name += (
-            f"｜{_trail_horizon_label(py)} g≈{_trailing_log_g_last(pg, float(erp_ann)):.1%}"
+            f"｜{_trail_horizon_label(py)} 年化外推g≈"
+            f"{_trailing_log_g_last(pg, float(erp_ann)):.1%}"
         )
-    # Hover must not reuse as-of 实现CAGR inside path_name — that number is
-    # end-of-series only and would look identical on every historical point.
+    # Hover must not reuse as-of 实现CAGR / window return inside path_name —
+    # those numbers are end-of-series only.
     hover_path_label = path_name + ", 诊断)"
-    if show_realized and np.isfinite(real_g):
-        path_name += f"｜实现CAGR≈{real_g:.1%}"
-    path_name += ", 诊断)"
 
     hover_need: list[str] = []
     peer_cols = [
@@ -494,16 +557,31 @@ def _add_own_log_trail_kline_row(
             return _align_series_to_plot(series, df)
         return series
 
+    cum_aln = _to_plot(_window_cum_return(close_fit, float(trail_years)))
+    cum_arr = cum_aln.to_numpy(dtype=float)
+    finite_cum = cum_arr[np.isfinite(cum_arr)]
+    if finite_cum.size:
+        path_name += f"｜窗口{float(finite_cum[-1]):+.1%}"
+    short_note = _short_window_note(len(close_fit), float(trail_years))
+    if short_note:
+        path_name += f"｜{short_note}"
+    if show_realized and np.isfinite(real_g):
+        path_name += f"｜实现CAGR≈{real_g:.1%}"
+    path_name += ", 诊断)"
+
+    min_rail = rail_min_bars(float(trail_years))
     pct_signed = _to_plot(
         causal_path_residual_signed_percentile(
             erp_fit,
             close_fit,
-            min_bars=_trail_fit_min_bars(float(trail_years)),
+            min_bars=min_rail,
         )
     )
     pct_arr = pct_signed.to_numpy(dtype=float)
     ewma_signed = _to_plot(
-        ewma_path_residual_signed_percentile(erp_fit, close_fit)
+        ewma_path_residual_signed_percentile(
+            erp_fit, close_fit, min_bars=min_rail
+        )
     )
     ewma_arr = ewma_signed.to_numpy(dtype=float)
     for i, (d, pv, rn) in enumerate(
@@ -517,13 +595,16 @@ def _add_own_log_trail_kline_row(
         dual_txt = ""
         for py, parr in peer_cols:
             dual_txt += (
-                f"<br>双尺度·{_trail_horizon_label(py)}路径年化={_fmt_vol(parr[i])}"
+                f"<br>双尺度·{_trail_horizon_label(py)}路径年化外推={_fmt_vol(parr[i])}"
             )
         real_txt = ""
         if g_real_aln is not None and len(g_real_aln) == len(df):
             rg = float(g_real_aln.iloc[i])
             if np.isfinite(rg):
                 real_txt = f"<br>当日实现年化({hz})={_fmt_vol(rg)}"
+        win_txt = ""
+        if i < len(cum_arr) and np.isfinite(cum_arr[i]):
+            win_txt = f"<br>窗口累计={float(cum_arr[i]):+.1%}"
         pct_txt = (
             f"<br>相对路径因果分位={_fmt_signed_path_percentile(pct_arr[i])}"
             f"<br>相对路径ewma分位={_fmt_signed_path_percentile(ewma_arr[i])}"
@@ -536,7 +617,7 @@ def _add_own_log_trail_kline_row(
         hover_need.append(
             f"日期={pd.Timestamp(d).date()}<br>"
             f"{hover_path_label}={pv:.4f}<br>"
-            f"当日路径年化({hz})={_fmt_vol(rn)}{real_txt}{pct_txt}{gap_txt}{dual_txt}{extra}"
+            f"当日路径年化外推({hz})={_fmt_vol(rn)}{win_txt}{real_txt}{pct_txt}{gap_txt}{dual_txt}{extra}"
         )
     fig.add_trace(
         go.Scatter(
@@ -556,7 +637,7 @@ def _add_own_log_trail_kline_row(
     tag = hz if peers else ""
     if policy in {"expanding", "expanding_plus_ewma"}:
         upper_fit, lower_fit, delta = erp_path_symmetric_envelope(
-            erp_fit, close_fit, q=0.95
+            erp_fit, close_fit, q=0.95, min_bars=min_rail
         )
         upper = _to_plot(upper_fit)
         lower = _to_plot(lower_fit)
@@ -575,7 +656,7 @@ def _add_own_log_trail_kline_row(
             )
     if policy in {"ewma", "expanding_plus_ewma"}:
         ewma_up_fit, ewma_lo_fit, ewma_delta = _ewma_scaled_envelope(
-            erp_fit, close_fit
+            erp_fit, close_fit, min_bars=min_rail
         )
         ewma_up = _to_plot(ewma_up_fit)
         ewma_lo = _to_plot(ewma_lo_fit)
@@ -1418,9 +1499,22 @@ def trailing_log_trend_price_path(
     )
     y_arr = y.to_numpy(dtype=float)
     n = len(y_arr)
+    fb = float(fallback_erp) if np.isfinite(fallback_erp) else float("nan")
+    cache_key = (
+        "path",
+        _f64_digest(y_arr),
+        float(trail_y),
+        int(min_b),
+        float(tdy),
+        None if not np.isfinite(fb) else float(fb),
+    )
+    cached = _cache_get(_SERIES_CACHE, cache_key)
+    if cached is not None:
+        out.iloc[:] = cached[0]
+        g_out.iloc[:] = cached[1]
+        return out, g_out
     path_arr = np.full(n, np.nan, dtype=float)
     g_arr = np.full(n, np.nan, dtype=float)
-    fb = float(fallback_erp) if np.isfinite(fallback_erp) else float("nan")
     for t in range(n):
         start = 0
         if trail_bars > 0 and (t + 1) >= trail_bars:
@@ -1457,6 +1551,7 @@ def trailing_log_trend_price_path(
         g_arr[t] = float(g)
     out.iloc[:] = path_arr
     g_out.iloc[:] = g_arr
+    _cache_put(_SERIES_CACHE, cache_key, (path_arr.copy(), g_arr.copy()))
     return out, g_out
 
 
@@ -1854,6 +1949,61 @@ def fair_need_compound_price_path(
     return out, need_out, rebase_anchor
 
 
+_SERIES_CACHE: OrderedDict[tuple, tuple] = OrderedDict()
+_SERIES_CACHE_MAX = 64
+_FAIR_PATH_RAILS_STAMP = ""
+
+
+def _f64_digest(arr: np.ndarray) -> bytes:
+    return hashlib.sha1(np.ascontiguousarray(arr, dtype=np.float64).tobytes()).digest()
+
+
+def _cache_get(cache: OrderedDict, key: tuple):
+    hit = cache.get(key)
+    if hit is None:
+        return None
+    cache.move_to_end(key)
+    return hit
+
+
+def _cache_put(cache: OrderedDict, key: tuple, value, *, limit: int = _SERIES_CACHE_MAX) -> None:
+    cache[key] = value
+    cache.move_to_end(key)
+    while len(cache) > limit:
+        cache.popitem(last=False)
+
+
+def _linear_quantile_sorted(sorted_vals: list[float], q: float) -> float:
+    from etf_daily.lib.fair_path_research import linear_quantile_sorted
+
+    return linear_quantile_sorted(sorted_vals, q)
+
+
+def fair_path_rails_stamp() -> str:
+    """Stable id of the fig7–11 path/rail formulas. Incremental HTML must match it."""
+    import inspect
+
+    global _FAIR_PATH_RAILS_STAMP
+    if _FAIR_PATH_RAILS_STAMP:
+        return _FAIR_PATH_RAILS_STAMP
+    from etf_daily.lib.fair_path_research import DEFAULT_EWMA_LAMBDA, ewma_scaled_envelope
+
+    blobs = [
+        f"min_bars={FAIR_PATH_LOG_TREND_MIN_BARS}",
+        f"trail_years={FAIR_PATH_LOG_TREND_TRAIL_YEARS}",
+        "q=0.95",
+        f"ewma_lambda={DEFAULT_EWMA_LAMBDA}",
+        inspect.getsource(trailing_log_trend_price_path),
+        inspect.getsource(erp_path_symmetric_envelope),
+        inspect.getsource(ewma_scaled_envelope),
+        inspect.getsource(_trail_envelope_policy),
+        inspect.getsource(rail_min_bars),
+    ]
+    digest = hashlib.sha256("\n".join(blobs).encode()).hexdigest()[:16]
+    _FAIR_PATH_RAILS_STAMP = f"fair-path-rails:{digest}"
+    return _FAIR_PATH_RAILS_STAMP
+
+
 def erp_path_symmetric_envelope(
     path: pd.Series,
     close: pd.Series,
@@ -1887,23 +2037,29 @@ def erp_path_symmetric_envelope(
         return upper, lower, float("nan")
     path_arr = p.to_numpy(dtype=float)
     close_arr = c.to_numpy(dtype=float)
+    cache_key = ("p95", _f64_digest(path_arr), _f64_digest(close_arr), float(qq), int(min_b))
+    cached = _cache_get(_SERIES_CACHE, cache_key)
+    if cached is not None:
+        upper.iloc[:] = cached[0]
+        lower.iloc[:] = cached[1]
+        return upper, lower, float(cached[2])
     n = len(path_arr)
     upper_arr = np.full(n, np.nan, dtype=float)
     lower_arr = np.full(n, np.nan, dtype=float)
     delta_arr = np.full(n, np.nan, dtype=float)
-    abs_hist: list[float] = []
+    sorted_abs: list[float] = []
     for t in range(n):
         pt = float(path_arr[t])
         ct = float(close_arr[t])
         if np.isfinite(pt) and pt > 0 and np.isfinite(ct) and ct > 0:
             rt = float(np.log(ct / pt))
             if np.isfinite(rt):
-                abs_hist.append(abs(rt))
-        if len(abs_hist) < min_b:
+                bisect.insort(sorted_abs, abs(rt))
+        if len(sorted_abs) < min_b:
             continue
         if not (np.isfinite(pt) and pt > 0):
             continue
-        delta_t = float(np.quantile(np.asarray(abs_hist, dtype=float), qq))
+        delta_t = _linear_quantile_sorted(sorted_abs, qq)
         if not np.isfinite(delta_t) or delta_t < 0:
             continue
         delta_arr[t] = delta_t
@@ -1913,6 +2069,7 @@ def erp_path_symmetric_envelope(
     lower.iloc[:] = lower_arr
     finite_d = delta_arr[np.isfinite(delta_arr)]
     delta_asof = float(finite_d[-1]) if finite_d.size else float("nan")
+    _cache_put(_SERIES_CACHE, cache_key, (upper_arr.copy(), lower_arr.copy(), delta_asof))
     return upper, lower, delta_asof
 
 
@@ -1940,9 +2097,14 @@ def causal_path_residual_signed_percentile(
         return out
     path_arr = p.to_numpy(dtype=float)
     close_arr = c.to_numpy(dtype=float)
+    cache_key = ("pct", _f64_digest(path_arr), _f64_digest(close_arr), int(min_b))
+    cached = _cache_get(_SERIES_CACHE, cache_key)
+    if cached is not None:
+        out.iloc[:] = cached
+        return out
     n = len(path_arr)
     signed = np.full(n, np.nan, dtype=float)
-    abs_hist: list[float] = []
+    sorted_abs: list[float] = []
     for t in range(n):
         pt = float(path_arr[t])
         ct = float(close_arr[t])
@@ -1950,11 +2112,10 @@ def causal_path_residual_signed_percentile(
         if np.isfinite(pt) and pt > 0 and np.isfinite(ct) and ct > 0:
             rt = float(np.log(ct / pt))
             if np.isfinite(rt):
-                abs_hist.append(abs(rt))
-        if len(abs_hist) < min_b or not np.isfinite(rt):
+                bisect.insort(sorted_abs, abs(rt))
+        if len(sorted_abs) < min_b or not np.isfinite(rt):
             continue
-        hist = np.asarray(abs_hist, dtype=float)
-        q_t = float(np.mean(hist <= abs(rt)))
+        q_t = bisect.bisect_right(sorted_abs, abs(rt)) / len(sorted_abs)
         if not np.isfinite(q_t):
             continue
         if rt > 0:
@@ -1964,6 +2125,7 @@ def causal_path_residual_signed_percentile(
         else:
             signed[t] = 0.0
     out.iloc[:] = signed
+    _cache_put(_SERIES_CACHE, cache_key, signed.copy())
     return out
 
 
@@ -2014,9 +2176,20 @@ def ewma_path_residual_signed_percentile(
     sigma = ewma_residual_sigma(r, lam=lam_f)
     r_arr = r.to_numpy(dtype=float)
     s_arr = sigma.to_numpy(dtype=float)
+    cache_key = (
+        "ewma_pct",
+        _f64_digest(r_arr),
+        _f64_digest(s_arr),
+        int(min_b),
+        float(lam_f),
+    )
+    cached = _cache_get(_SERIES_CACHE, cache_key)
+    if cached is not None:
+        out.iloc[:] = cached
+        return out
     n = len(r_arr)
     signed = np.full(n, np.nan, dtype=float)
-    abs_z: list[float] = []
+    sorted_z: list[float] = []
     for t in range(n):
         rt = float(r_arr[t])
         st = float(s_arr[t])
@@ -2026,11 +2199,10 @@ def ewma_path_residual_signed_percentile(
             if not np.isfinite(zt):
                 zt = float("nan")
         if np.isfinite(zt):
-            abs_z.append(abs(zt))
-        if len(abs_z) < min_b or not np.isfinite(zt):
+            bisect.insort(sorted_z, abs(zt))
+        if len(sorted_z) < min_b or not np.isfinite(zt):
             continue
-        hist = np.asarray(abs_z, dtype=float)
-        q_t = float(np.mean(hist <= abs(zt)))
+        q_t = bisect.bisect_right(sorted_z, abs(zt)) / len(sorted_z)
         if not np.isfinite(q_t):
             continue
         if zt > 0:
@@ -2040,6 +2212,7 @@ def ewma_path_residual_signed_percentile(
         else:
             signed[t] = 0.0
     out.iloc[:] = signed
+    _cache_put(_SERIES_CACHE, cache_key, signed.copy())
     return out
 
 
@@ -2153,13 +2326,16 @@ def build_candle_volume_vol_figure(
     if has_need and has_policy:
         mode = str(FAIR_PATH_MODE or "").strip().lower()
         trail_y = int(round(float(FAIR_PATH_LOG_TREND_TRAIL_YEARS)))
+        n_fit = len(close_for_fair) if close_for_fair is not None else int(len(df))
         realized_note = (
             "·实现CAGR=端点数字≠路径" if _fair_path_show_realized_cagr() else ""
         )
+        short7 = _short_window_note(n_fit, float(FAIR_PATH_LOG_TREND_TRAIL_YEARS))
+        short7_bit = f"·{short7}" if short7 else ""
         if mode == "own_log_trend_trail":
             fig7_title = (
-                f"图7 K线 vs 公平路径(自有log趋势·滚动{trail_y}年·因果P95+EWMA双轨；"
-                f"≠图4公平年化{realized_note})"
+                f"图7 K线 vs 公平路径(自有log趋势·滚动{trail_y}年·因果P95+EWMA双轨"
+                f"{short7_bit}；≠图4公平年化{realized_note})"
             )
         elif mode == "own_log_trend":
             fig7_title = "图7 K线 vs 公平路径(自有log趋势·全样本诊断；≠图4公平年化)"
@@ -2199,8 +2375,10 @@ def build_candle_volume_vol_figure(
                     rail_note = "·因果P95+EWMA双轨"
                 else:
                     rail_note = ""
+                short_ey = _short_window_note(n_fit, float(ey))
+                short_bit = f"·{short_ey}" if short_ey else ""
                 titles.append(
-                    f"图{fig_n} K线 vs 公平路径(自有log趋势·滚动{hz}{rail_note}；"
+                    f"图{fig_n} K线 vs 公平路径(自有log趋势·滚动{hz}{rail_note}{short_bit}；"
                     f"多尺度对照图7·{_trail_horizon_label(float(FAIR_PATH_LOG_TREND_TRAIL_YEARS))}{realized_note})"
                 )
             subplot_titles = tuple(titles)
@@ -3415,6 +3593,9 @@ def export_one(
         out_path = default_html_path(code, name, start_date, end_date, out_dir)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     write_adaptive_html(fig, out_path)
+    from etf_daily.lib.incremental_from_listing import stamp_fair_path_html
+
+    stamp_fair_path_html(out_path)
     print(f"[INFO] wrote HTML: {out_path}")
 
     if dump_overlay_csv is not None:

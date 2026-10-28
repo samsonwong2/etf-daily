@@ -809,28 +809,65 @@ def select_fdr_threshold(
     rng = np.random.default_rng(seed)
     blocks = frame[block_col].astype(str).to_numpy() if block_col in frame.columns else None
     unique_blocks = np.unique(blocks) if blocks is not None else None
+    # Per block, scores sorted ascending and the count of false labels from that point
+    # to the end. A threshold lookup is then searchsorted, and bootstrap membership
+    # reuses those counts instead of scanning every row.
+    block_scores: list[np.ndarray] = []
+    block_fp_suffix: list[np.ndarray] = []
+    if unique_blocks is not None:
+        for block in unique_blocks:
+            taken = blocks == block
+            order = np.argsort(scores[taken], kind="mergesort")
+            sorted_scores = scores[taken][order]
+            sorted_fp = ~labels[taken][order]
+            if sorted_fp.size:
+                suffix = np.cumsum(sorted_fp[::-1])[::-1]
+            else:
+                suffix = np.array([], dtype=np.int64)
+            block_scores.append(sorted_scores)
+            block_fp_suffix.append(suffix)
+
+    def _counts_at(thr: float) -> tuple[np.ndarray, np.ndarray]:
+        n_blocks = len(block_scores)
+        block_n = np.empty(n_blocks, dtype=np.int64)
+        block_fp = np.empty(n_blocks, dtype=np.int64)
+        for i, (sorted_scores, suffix) in enumerate(zip(block_scores, block_fp_suffix, strict=True)):
+            if sorted_scores.size == 0:
+                block_n[i] = 0
+                block_fp[i] = 0
+                continue
+            pos = int(np.searchsorted(sorted_scores, thr, side="left"))
+            block_n[i] = sorted_scores.size - pos
+            block_fp[i] = int(suffix[pos]) if pos < suffix.size else 0
+        return block_n, block_fp
 
     best: float | None = None
     best_n = 0
     for thr in candidates:
-        mask = scores >= float(thr)
+        thr_f = float(thr)
+        if unique_blocks is not None:
+            block_n, block_fp = _counts_at(thr_f)
+            n = int(block_n.sum())
+            fp = int(block_fp.sum())
+        else:
+            mask = scores >= thr_f
+            n = int(mask.sum())
+            fp = int((~labels[mask]).sum())
         # include all ties at thr
-        n = int(mask.sum())
         if n < min_confirm:
             continue
         # point FDR
-        fp = int((~labels[mask]).sum())
         fdr_point = fp / max(n, 1)
         # block bootstrap upper CI
         if unique_blocks is not None and unique_blocks.size >= 2:
             boot = []
             for _ in range(n_bootstrap):
                 chosen = rng.choice(unique_blocks, size=unique_blocks.size, replace=True)
-                sel = np.isin(blocks, chosen) & mask
-                nn = int(sel.sum())
+                present = np.isin(unique_blocks, chosen)
+                nn = int(block_n[present].sum())
                 if nn == 0:
                     continue
-                boot.append(float((~labels[sel]).sum()) / nn)
+                boot.append(float(block_fp[present].sum()) / nn)
             if not boot:
                 continue
             upper = float(np.quantile(boot, 0.95))

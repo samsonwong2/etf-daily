@@ -8,9 +8,11 @@ Does not change production hold_up method selection.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import shutil
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -21,9 +23,13 @@ import plotly.graph_objects as go
 from etf_daily.lib.fair_path_band_signals import (
     FIG_PANELS,
     _decode_plotly_bdata,
+    _decode_raw_traces,
     _extract_plotly_traces,
     _plotly_x_to_index,
+    _walk_plotly_json,
+    decode_plotly_layout,
     load_ohlcv_from_regime_html,
+    ohlcv_from_traces,
 )
 from etf_daily.lib.plotly_html_autoscale import write_adaptive_html
 
@@ -161,6 +167,9 @@ def _indexed_ohlc(frame: pd.DataFrame) -> pd.DataFrame:
     return work[cols]
 
 
+_OHLC_COLS = ("$open", "$high", "$low", "$close")
+
+
 def overlap_ohlc_matches(
     html_ohlcv: pd.DataFrame,
     official_ohlcv: pd.DataFrame,
@@ -171,6 +180,8 @@ def overlap_ohlc_matches(
 
     A provisional bar past the official calendar is ignored. Empty official
     data is not a mismatch. Any shared day whose OHLC differs is.
+    A missing OHLC column, a non-finite value, or ``abs(official) <= 1e-12``
+    on a shared day is a mismatch, same as ``end_ohlc_matches``.
     """
     html = _indexed_ohlc(html_ohlcv)
     official = _indexed_ohlc(official_ohlcv)
@@ -179,10 +190,50 @@ def overlap_ohlc_matches(
     common = html.index.intersection(official.index)
     if len(common) == 0:
         return True
-    for day in common:
-        if not end_ohlc_matches(html, official, str(pd.Timestamp(day).date()), tol=tol):
-            return False
-    return True
+    if any(col not in html.columns or col not in official.columns for col in _OHLC_COLS):
+        return False
+    left = html.loc[common, list(_OHLC_COLS)].apply(pd.to_numeric, errors="coerce").to_numpy(
+        dtype=float
+    )
+    right = (
+        official.loc[common, list(_OHLC_COLS)]
+        .apply(pd.to_numeric, errors="coerce")
+        .to_numpy(dtype=float)
+    )
+    finite = np.isfinite(left) & np.isfinite(right) & (np.abs(right) > 1e-12)
+    if not bool(finite.all()):
+        return False
+    rel = np.abs(left / right - 1.0)
+    return not bool((rel > float(tol)).any())
+
+
+def ohlcv_fingerprint(frame: pd.DataFrame) -> str:
+    """Stable id of normalized OHLC. Unchanged data skips the HTML parse."""
+    indexed = _indexed_ohlc(frame)
+    digest = hashlib.sha256()
+    digest.update(str(len(indexed)).encode())
+    if indexed.empty:
+        return digest.hexdigest()[:16]
+    idx = pd.DatetimeIndex(pd.to_datetime(indexed.index))
+    digest.update(np.ascontiguousarray(idx.asi8).tobytes())
+    for col in _OHLC_COLS:
+        if col not in indexed.columns:
+            digest.update(b"-")
+            continue
+        vals = pd.to_numeric(indexed[col], errors="coerce").to_numpy(dtype=np.float64)
+        digest.update(np.ascontiguousarray(vals).tobytes())
+    return digest.hexdigest()[:16]
+
+
+def _page_ohlc_is_stale(path: str, official: pd.DataFrame, tol: float) -> str | None:
+    """None when the page matches. Otherwise the error, or ``\"\"`` for a value mismatch."""
+    try:
+        _, html_ohlcv = load_ohlcv_from_regime_html(path)
+    except Exception as exc:  # noqa: BLE001
+        return str(exc)
+    if overlap_ohlc_matches(html_ohlcv, official, tol=tol):
+        return None
+    return ""
 
 
 def stale_end_bar_codes(
@@ -191,6 +242,9 @@ def stale_end_bar_codes(
     end: str,
     *,
     tol: float,
+    jobs: int = 1,
+    fingerprints: dict[str, str] | None = None,
+    verified_fp: dict[str, str] | None = None,
 ) -> set[str]:
     """Codes whose saved HTML OHLC disagrees with the official series.
 
@@ -198,25 +252,59 @@ def stale_end_bar_codes(
     Comparison covers the whole overlap, not only ``end``, so a shifted
     history under a newer provisional bar is still redrawn. Unreadable pages
     are stale so the next pass replaces them.
-    """
-    from etf_daily.lib.fair_path_band_signals import load_ohlcv_from_regime_html
 
+    When ``fingerprints`` holds the OHLC id recorded at the last render and it
+    still matches, the HTML is not parsed. A mismatch falls through to the
+    overlap compare. ``verified_fp`` receives the current id for pages that match.
+    """
+    saved = {
+        str(code).upper(): str(value)
+        for code, value in (fingerprints or {}).items()
+        if value and str(value).lower() != "nan"
+    }
     stale: set[str] = set()
+    pending: list[tuple[str, str, pd.DataFrame, str]] = []
     for code, path in pages.items():
+        key = str(code).upper()
         page = Path(path)
         if not page.is_file() or page.stat().st_size <= 0:
             continue
         try:
-            _, html_ohlcv = load_ohlcv_from_regime_html(page)
             official = official_ohlcv_for(code)
-            if not overlap_ohlc_matches(html_ohlcv, official, tol=tol):
-                stale.add(str(code).upper())
         except Exception as exc:  # noqa: BLE001
             print(f"[WARN] {code}: cannot compare {end} bar ({exc}); redraw")
-            stale.add(str(code).upper())
+            stale.add(key)
+            continue
+        fp = ohlcv_fingerprint(official)
+        if saved.get(key) == fp:
+            if verified_fp is not None:
+                verified_fp[key] = fp
+            continue
+        pending.append((key, str(page), official, fp))
+
+    def _take(key: str, fp: str, reason: str | None) -> None:
+        if reason is None:
+            if verified_fp is not None:
+                verified_fp[key] = fp
+            return
+        if reason:
+            print(f"[WARN] {key}: cannot compare {end} bar ({reason}); redraw")
+        stale.add(key)
+
+    workers = max(1, int(jobs))
+    if workers <= 1 or len(pending) <= 1:
+        for key, path, official, fp in pending:
+            _take(key, fp, _page_ohlc_is_stale(path, official, tol))
+        return stale
+
+    with ProcessPoolExecutor(max_workers=workers) as pool:
+        futs = {
+            pool.submit(_page_ohlc_is_stale, path, official, tol): (key, fp)
+            for key, path, official, fp in pending
+        }
+        for fut, (key, fp) in futs.items():
+            _take(key, fp, fut.result())
     return stale
-
-
 
 
 def overlap_close_ok(
@@ -609,7 +697,7 @@ def _update_title_g(layout: dict[str, Any], g_by_years: dict[float, float], delt
         if not np.isfinite(g):
             continue
         hz = _horizon_label(years)
-        pat = re.compile(rf"({re.escape(hz)}\s*g≈)-?[\d.]+%")
+        pat = re.compile(rf"({re.escape(hz)}\s*(?:年化外推)?g≈)-?[\d.]+%")
         text = pat.sub(rf"\g<1>{g:.1%}", text)
         text = text.replace(f"{hz} g≈{g:.1%}".replace("%", "％"), f"{hz} g≈{g:.1%}")
     for years, d in deltas.items():
@@ -992,6 +1080,7 @@ def _patch_trail_path_hover(
     signed_pct: float,
     ewma_pct: float,
     asset_name: str | None,
+    window_cum: float | None = None,
 ) -> str:
     from etf_daily.plots.plot_regime_transition_example import (
         _fmt_signed_path_percentile,
@@ -1003,11 +1092,22 @@ def _patch_trail_path_hover(
     s = re.sub(r"日期=\d{4}-\d{2}-\d{2}", f"日期={new_ts.date()}", s, count=1)
     s = re.sub(r"(诊断\))=[-+\d.]+", rf"\g<1>={path_new:.4f}", s, count=1)
     s = re.sub(
-        r"(当日路径年化\([^)]+\)=)-?[\d.]+%",
+        r"(当日路径年化(?:外推)?\([^)]+\)=)-?[\d.]+%",
         lambda m: f"{m.group(1)}{_fmt_vol(g_new)}",
         s,
         count=1,
     )
+    if window_cum is not None and np.isfinite(window_cum):
+        wtxt = f"窗口累计={float(window_cum):+.1%}"
+        if re.search(r"窗口累计=[+-][\d.]+%", s):
+            s = re.sub(r"窗口累计=[+-][\d.]+%", wtxt, s, count=1)
+        else:
+            s = re.sub(
+                r"(当日路径年化(?:外推)?\([^)]+\)=-?[\d.]+%)",
+                rf"\1<br>{wtxt}",
+                s,
+                count=1,
+            )
     pct_txt = f"相对路径因果分位={_fmt_signed_path_percentile(signed_pct)}"
     s = re.sub(r"相对路径因果分位=[^<]+", pct_txt, s, count=1)
     ewma_txt = f"相对路径ewma分位={_fmt_signed_path_percentile(ewma_pct)}"
@@ -1024,7 +1124,7 @@ def _patch_trail_path_hover(
     for years, g in g_by.items():
         hz = _horizon_label(years)
         s = re.sub(
-            rf"(双尺度·{re.escape(hz)}路径年化=)-?[\d.]+%",
+            rf"(双尺度·{re.escape(hz)}路径年化(?:外推)?=)-?[\d.]+%",
             lambda m, gg=g: f"{m.group(1)}{_fmt_vol(gg)}",
             s,
         )
@@ -1047,8 +1147,10 @@ def append_fair_path_bar(
     """Append last-bar path/rails/candles. Returns g and delta by trail years."""
     from etf_daily.plots.plot_regime_transition_example import (
         _trail_fit_min_bars,
+        _window_cum_return,
         causal_path_residual_signed_percentile,
         ewma_path_residual_signed_percentile,
+        rail_min_bars,
     )
 
     px_new = float(ohlcv_last["$close"])
@@ -1080,6 +1182,7 @@ def append_fair_path_bar(
         if yax is None:
             continue
         min_b = _trail_fit_min_bars(float(years))
+        min_rail = rail_min_bars(float(years))
         path_new, g_new = _ols_last_path_g(close, trail_years=float(years), min_bars=min_b)
         g_by[float(years)] = g_new
         hz = _horizon_label(float(years))
@@ -1104,7 +1207,7 @@ def append_fair_path_bar(
             close_hist[:n],
             path_new=path_new,
             close_new=px_new,
-            min_bars=min_b,
+            min_bars=min_rail,
         )
         d_by[float(years)] = delta
         _append_new_x(path_tr, new_ts)
@@ -1146,18 +1249,22 @@ def append_fair_path_bar(
         )
         path_arr = np.asarray(ys, dtype=float)
         n = min(len(path_arr), len(close_arr))
+        min_rail = rail_min_bars(float(years))
         signed = causal_path_residual_signed_percentile(
             pd.Series(path_arr[:n]),
             pd.Series(close_arr[:n]),
-            min_bars=_trail_fit_min_bars(float(years)),
+            min_bars=min_rail,
         )
         last_pct = float(signed.iloc[-1]) if len(signed) else float("nan")
         ewma_signed = ewma_path_residual_signed_percentile(
             pd.Series(path_arr[:n]),
             pd.Series(close_arr[:n]),
+            min_bars=min_rail,
         )
         last_ewma = float(ewma_signed.iloc[-1]) if len(ewma_signed) else float("nan")
         g_this = float(g_by.get(float(years), float("nan")))
+        cum_s = _window_cum_return(close, float(years))
+        last_cum = float(cum_s.iloc[-1]) if len(cum_s) else float("nan")
         new_hover = _patch_trail_path_hover(
             _customdata_text(cd[-1]),
             new_ts=new_ts,
@@ -1168,6 +1275,7 @@ def append_fair_path_bar(
             signed_pct=last_pct,
             ewma_pct=last_ewma,
             asset_name=asset_name,
+            window_cum=last_cum,
         )
         _append_customdata(path_tr, new_hover)
 
@@ -1685,6 +1793,31 @@ def sync_fig1_regime_shapes(
     return True
 
 
+_RAILS_STAMP_RE = re.compile(r"<!--\s*(fair-path-rails:[0-9a-f]+)\s*-->")
+
+
+def read_fair_path_rails_stamp(html: str) -> str | None:
+    m = _RAILS_STAMP_RE.search(html)
+    return m.group(1) if m else None
+
+
+def stamp_fair_path_html(path: Path) -> str:
+    """Write the current fig7–11 formula id into an adaptive HTML file."""
+    from etf_daily.plots.plot_regime_transition_example import fair_path_rails_stamp
+
+    stamp = fair_path_rails_stamp()
+    file = Path(path)
+    text = file.read_text(encoding="utf-8")
+    text = _RAILS_STAMP_RE.sub("", text)
+    comment = f"<!-- {stamp} -->"
+    if "</body>" in text:
+        text = text.replace("</body>", comment + "\n</body>", 1)
+    else:
+        text = text.rstrip() + "\n" + comment + "\n"
+    file.write_text(text, encoding="utf-8")
+    return stamp
+
+
 def try_incremental_html(
     *,
     code: str,
@@ -1712,9 +1845,15 @@ def try_incremental_html(
     if prev is None or not prev.exists():
         return None, "no_prev_html"
     try:
-        prev_close, _ = load_ohlcv_from_regime_html(prev)
+        html_txt = prev.read_text(encoding="utf-8")
+        raw_traces, data_end = _decode_raw_traces(html_txt)
+        traces = _walk_plotly_json(raw_traces)
+        prev_close, _ = ohlcv_from_traces(traces, source=prev)
     except Exception:
         return None, "prev_html_ohlcv"
+    from etf_daily.plots.plot_regime_transition_example import fair_path_rails_stamp
+
+    rails_stamp = fair_path_rails_stamp()
     work = ohlcv.copy()
     if "datetime" not in work.columns:
         work = work.reset_index()
@@ -1729,10 +1868,11 @@ def try_incremental_html(
     if not ok:
         return None, why
 
-    html_txt = prev.read_text(encoding="utf-8")
+    # fair-path-rails stamp must match; a missing or stale stamp rebuilds in full.
+    if read_fair_path_rails_stamp(html_txt) != rails_stamp:
+        return None, "algo_version"
     try:
-        traces = _extract_plotly_traces(html_txt)
-        layout = extract_layout(html_txt)
+        layout = decode_plotly_layout(html_txt, data_end)
     except Exception:
         return None, "parse_html"
 
@@ -1766,7 +1906,7 @@ def try_incremental_html(
         if changed:
             fig = go.Figure(data=traces, layout=layout)
             out_path.parent.mkdir(parents=True, exist_ok=True)
-            write_adaptive_html(fig, out_path)
+            write_adaptive_html(fig, out_path, rails_stamp=rails_stamp)
             return out_path, "ok"
         shutil.copy2(prev, out_path)
         return out_path, "same"
@@ -1812,7 +1952,7 @@ def try_incremental_html(
     _sync_fig1_shapes()
     fig = go.Figure(data=traces, layout=layout)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    write_adaptive_html(fig, out_path)
+    write_adaptive_html(fig, out_path, rails_stamp=rails_stamp)
     _ = safe
     _ = start_in_name
     return out_path, "ok"

@@ -1,6 +1,7 @@
 """Plotly HTML helpers for adaptive regime charts."""
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 # Injected after Plotly.newPlot.
@@ -595,14 +596,34 @@ Y_AUTOSCALE_ON_X_ZOOM_JS = r"""
 """
 
 
-def write_adaptive_html(fig, path: str | Path, *, include_plotlyjs: str = "cdn") -> None:
-    """Write Plotly figure HTML with date-window toolbar and X-zoom Y-autoscale."""
-    fig.write_html(
-        str(Path(path)),
+def write_adaptive_html(
+    fig,
+    path: str | Path,
+    *,
+    include_plotlyjs: str = "cdn",
+    rails_stamp: str | None = None,
+) -> None:
+    """Write Plotly figure HTML with date-window toolbar and X-zoom Y-autoscale.
+
+    ``rails_stamp`` (``fair-path-rails:<hex>``) is inserted before ``</body>`` in
+    the same write, so callers do not read the page back just to stamp it.
+    """
+    import plotly.io as pio
+
+    html = pio.to_html(
+        fig,
         include_plotlyjs=include_plotlyjs,
         post_script=Y_AUTOSCALE_ON_X_ZOOM_JS,
         config={"scrollZoom": False, "displaylogo": False},
     )
+    if rails_stamp:
+        html = re.sub(r"<!--\s*fair-path-rails:[0-9a-f]+\s*-->\s*", "", html)
+        comment = f"<!-- {rails_stamp} -->"
+        if "</body>" in html:
+            html = html.replace("</body>", comment + "\n</body>", 1)
+        else:
+            html = html.rstrip() + "\n" + comment + "\n"
+    Path(path).write_text(html, encoding="utf-8")
 
 
 __all__ = ["Y_AUTOSCALE_ON_X_ZOOM_JS", "write_adaptive_html"]

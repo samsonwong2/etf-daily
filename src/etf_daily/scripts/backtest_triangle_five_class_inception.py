@@ -16,7 +16,6 @@ Outputs under ``<out-dir>/inception_five_class_backtest/``:
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
 import sys
 from dataclasses import asdict, dataclass
@@ -148,12 +147,8 @@ def segment_stats(events: pd.DataFrame, split_date: str) -> pd.DataFrame:
 
 
 def _load_plot_mod():
-    path = _PROJECT_ROOT / "decision_pack" / "scripts" / "plot_regime_transition_example.py"
-    spec = importlib.util.spec_from_file_location("plot_regime_example_inception", path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"cannot load {path}")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    import etf_daily.plots.plot_regime_transition_example as mod
+
     return mod
 
 

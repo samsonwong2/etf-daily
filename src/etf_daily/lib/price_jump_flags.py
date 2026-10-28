@@ -14,15 +14,18 @@ import pandas as pd
 
 from etf_daily.pipeline.price_adjustments import DEFAULT_QFQ_THRESHOLD, _compute_cum_factors
 
-# Common ETF split ratios (new/old - 1): 1:2 -> -0.5, 1:3 -> -2/3, 2:1 -> +1, ...
+# Common ETF split ratios (new/old - 1): 1:2 -> -0.5, 1:3 -> -2/3, 1:10 -> -0.9, 10:1 -> +9, ...
 _SPLIT_RATIO_TARGETS: tuple[float, ...] = (
-    -0.5,
-    -2.0 / 3.0,
-    -0.75,
+    -0.9,
     -0.8,
+    -0.75,
+    -2.0 / 3.0,
+    -0.5,
     1.0,
     2.0,
     3.0,
+    4.0,
+    9.0,
 )
 
 

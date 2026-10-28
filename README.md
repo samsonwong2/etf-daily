@@ -33,10 +33,10 @@ etf-daily etl
 etf-daily pool
 etf-daily cluster-review
 etf-daily regime --skip-rebuild --skip-html
-etf-daily listing --as-of 2026-10-23
-etf-daily hrp --as-of 2026-10-23
-etf-daily hrp --dist-t 0.8 --as-of 2026-10-23
-etf-daily rules7 --listing-dir "$PLOTLY_ROOT/20261023_from_listing"
+etf-daily listing --as-of 2026-10-26
+etf-daily hrp --as-of 2026-10-26
+etf-daily hrp --dist-t 0.8 --as-of 2026-10-26
+etf-daily rules7 --listing-dir "$PLOTLY_ROOT/20261026_from_listing"
 etf-daily triggers --listing-dir "$PLOTLY_ROOT/20260930_from_listing"
 etf-daily b1235 --listing-dir "$PLOTLY_ROOT/20260930_from_listing"
 etf-daily b1235-backtest --listing-dir "$PLOTLY_ROOT/20260930_from_listing"
@@ -129,8 +129,8 @@ Run these during the session, while Qlib still has no bar for today. `--as-of` d
 ```bash
 etf-daily regime --skip-html --intraday
 etf-daily listing --intraday
-etf-daily hrp --dist-t 0.8 --as-of 2026-10-23
-etf-daily rules7 --listing-dir "$PLOTLY_ROOT/20261023_from_listing"
+etf-daily hrp --dist-t 0.8 --as-of 2026-10-27
+etf-daily rules7 --listing-dir "$PLOTLY_ROOT/20261027_from_listing"
 ```
 
 Run them in that order. `listing` uses the same shared train cache as the end-of-day command. It does not need `adaptive --intraday`.

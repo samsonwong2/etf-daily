@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import re
 import sys
 import traceback
@@ -43,6 +44,7 @@ FIG12_BLOCK_RE = re.compile(
     r"\s*<!--\s*FIG12_SIX_STATES_START\s*-->.*?<!--\s*FIG12_SIX_STATES_END\s*-->",
     re.DOTALL,
 )
+FIG12_FP_RE = re.compile(r"<!--\s*FIG12_FP:([0-9a-f]+)\s*-->")
 _FNAME_RE = re.compile(
     r"^regime_transition_((?:SH|SZ)\d+)_(.+)_(\d{8})_(\d{8})_adaptive\.html$"
 )
@@ -89,15 +91,22 @@ def _inject_before_body_end(html: str, block: str) -> str:
     return html[: m.start()] + block + "\n" + html[m.start() :]
 
 
-def build_fig12_block(fig_html: str, *, state: str) -> str:
+def fig12_page_fp(cleaned_html: str) -> str:
+    """Hash of the page with the fig12 block removed."""
+    return hashlib.sha256(cleaned_html.encode("utf-8")).hexdigest()[:16]
+
+
+def build_fig12_block(fig_html: str, *, state: str, page_fp: str = "") -> str:
     heading = (
         f'<h3 style="font-family:sans-serif;padding-left:12px">图12 六状态背景色'
         f'<span style="font-size:13px;color:#666">（背景=六状态趋势划分，'
         f"判定方法见 docs/六状态趋势划分_八品种验证.md §8；"
         f"当前状态：{state}）</span></h3>"
     )
+    fp_line = f"<!-- FIG12_FP:{page_fp} -->\n" if page_fp else ""
     return (
         f"\n{FIG12_START}\n"
+        f"{fp_line}"
         f'<hr style="margin:24px 0">\n'
         f"{heading}\n"
         f"{fig_html}\n"
@@ -132,9 +141,28 @@ def list_html_files(html_dir: Path, codes: list[str] | None) -> list[Path]:
 
 
 def add_fig12_to_html(html_path: Path) -> dict[str, str]:
-    """Strip + redraw fig12 on one adaptive HTML. Returns status dict."""
+    """Strip + redraw fig12 on one adaptive HTML. Returns status dict.
+
+    A page whose fig12 block already records the hash of the rest of the file
+    is left untouched.
+    """
     html_path = Path(html_path)
     code, code_name = parse_html_label(html_path)
+    raw = html_path.read_text(encoding="utf-8")
+    cleaned = strip_fig12_block(raw)
+    page_fp = fig12_page_fp(cleaned)
+    found = FIG12_FP_RE.search(raw)
+    if found is not None and found.group(1) == page_fp and FIG12_START in raw:
+        state_m = re.search(r"当前状态：([^）<]+)", raw)
+        return {
+            "ok": "1",
+            "skipped": "1",
+            "path": str(html_path),
+            "code": code,
+            "state": state_m.group(1).strip() if state_m else "",
+            "last_date": "",
+            "error": "",
+        }
     close, ohlcv = load_ohlcv_from_regime_html(html_path)
     ms = enrich_frame_for_checklist(compute_multi_scale_frame(close))
     states = classify_six_states(ms)
@@ -142,12 +170,17 @@ def add_fig12_to_html(html_path: Path) -> dict[str, str]:
     last_dt = pd_last_date(close)
     fig = build_fig12_figure(ohlcv, states, code_name)
     fig_html = fig.to_html(full_html=False, include_plotlyjs=False, div_id="fig12_six_states")
-    raw = html_path.read_text(encoding="utf-8")
-    cleaned = strip_fig12_block(raw)
-    block = build_fig12_block(fig_html, state=state)
+    # Hash the page as strip_fig12_block will see it after this write, so the
+    # next run matches even if the block regex eats whitespace before </body>.
+    probe = _inject_before_body_end(
+        cleaned, build_fig12_block(fig_html, state=state, page_fp="0" * 16)
+    )
+    page_fp = fig12_page_fp(strip_fig12_block(probe))
+    block = build_fig12_block(fig_html, state=state, page_fp=page_fp)
     html_path.write_text(_inject_before_body_end(cleaned, block), encoding="utf-8")
     return {
         "ok": "1",
+        "skipped": "0",
         "path": str(html_path),
         "code": code,
         "state": state,
@@ -171,6 +204,7 @@ def _worker(path_str: str) -> dict[str, str]:
         code, _ = parse_html_label(path)
         return {
             "ok": "0",
+            "skipped": "0",
             "path": path_str,
             "code": code,
             "state": "",
@@ -209,7 +243,7 @@ def main(argv: list[str] | None = None) -> int:
         for p in files:
             results.append(_worker(str(p)))
             rec = results[-1]
-            flag = "OK" if rec["ok"] == "1" else "FAIL"
+            flag = "SKIP" if rec.get("skipped") == "1" else ("OK" if rec["ok"] == "1" else "FAIL")
             print(f"[fig12] {flag} {rec['code']} {rec.get('state', '')} {rec.get('last_date', '')}")
             if rec["ok"] != "1":
                 print(rec["error"], file=sys.stderr)
@@ -222,7 +256,7 @@ def main(argv: list[str] | None = None) -> int:
                 rec = fut.result()
                 results.append(rec)
                 done += 1
-                flag = "OK" if rec["ok"] == "1" else "FAIL"
+                flag = "SKIP" if rec.get("skipped") == "1" else ("OK" if rec["ok"] == "1" else "FAIL")
                 print(
                     f"[fig12] {done}/{n} {flag} {rec['code']} "
                     f"{rec.get('state', '')} {rec.get('last_date', '')}"

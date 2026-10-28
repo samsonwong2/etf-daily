@@ -488,6 +488,7 @@ def _process_one_listing_code(
     fair_path_extra_trail_years: str,
 ) -> tuple[str, dict | None, dict | None, str | None]:
     from etf_daily.lib.incremental_from_listing import (
+        ohlcv_fingerprint,
         try_incremental_html,
         write_book_csvs,
     )
@@ -620,6 +621,7 @@ def _process_one_listing_code(
         plot_start=plot_start,
         plot_end=end_date,
         as_of=as_of,
+        ohlcv_fp=ohlcv_fingerprint(ohlcv),
     )
     return code, listing_row, summary_row, None
 
@@ -966,6 +968,7 @@ def main(argv: list[str] | None = None) -> int:
 
     force_redraw = bool(args.retrain) or args.live_snapshot is not None
     stale_codes: set[str] = set()
+    verified_fp: dict[str, str] = {}
     if not force_redraw:
         pages = {
             code: path
@@ -983,11 +986,28 @@ def main(argv: list[str] | None = None) -> int:
                     pm, code, end_date, train_cutoff=train_cutoff
                 )
 
+            saved_fp: dict[str, str] = {}
+            listing_csv = out_dir / "listing_dates.csv"
+            if listing_csv.is_file():
+                try:
+                    saved_frame = pd.read_csv(listing_csv)
+                except Exception:  # noqa: BLE001
+                    saved_frame = pd.DataFrame()
+                if {"code", "ohlcv_fp"}.issubset(saved_frame.columns):
+                    for code_val, fp_val in zip(
+                        saved_frame["code"], saved_frame["ohlcv_fp"], strict=False
+                    ):
+                        if pd.notna(fp_val) and str(fp_val).strip():
+                            saved_fp[str(code_val).strip().upper()] = str(fp_val).strip()
+
             stale_codes = stale_end_bar_codes(
                 pages,
                 _official_ohlcv,
                 end_date,
                 tol=END_BAR_MATCH_TOL,
+                jobs=int(args.jobs),
+                fingerprints=saved_fp,
+                verified_fp=verified_fp,
             )
     if stale_codes:
         print(
@@ -1007,6 +1027,11 @@ def main(argv: list[str] | None = None) -> int:
             f"[INFO] skip {len(kept_listing_rows)} codes with existing listing HTML "
             f"for {end_date}"
         )
+        if verified_fp:
+            for row in kept_listing_rows:
+                key = str(row.get("code") or "").strip().upper()
+                if key in verified_fp:
+                    row["ohlcv_fp"] = verified_fp[key]
 
     try:
         listing_rows, summary_rows, errors = _run_listing_batch(

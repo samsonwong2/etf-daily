@@ -37,8 +37,10 @@ if str(_PROJECT_ROOT) not in sys.path:
 from etf_daily.paths import PLOTLY_OUTPUTS_DIR  # noqa: E402
 
 from etf_daily.lib.fair_path_band_signals import (  # noqa: E402
+    _decode_raw_traces,
     _extract_plotly_traces,
     _plotly_x_to_index,
+    decode_plotly_layout,
     load_ohlcv_from_regime_html,
 )
 from etf_daily.lib.plotly_html_autoscale import write_adaptive_html  # noqa: E402
@@ -69,55 +71,33 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def _extract_balanced(html: str, start: int) -> tuple[int, str]:
+    """Return (end, raw JSON) using the C scanner. Kept for callers that need the slice."""
     opener = html[start]
-    closer = "]" if opener == "[" else "}"
-    depth = 0
-    in_str = False
-    esc = False
-    i = start
-    while i < len(html):
-        c = html[i]
-        if in_str:
-            if esc:
-                esc = False
-            elif c == "\\":
-                esc = True
-            elif c == '"':
-                in_str = False
-        else:
-            if c == '"':
-                in_str = True
-            elif c == opener:
-                depth += 1
-            elif c == closer:
-                depth -= 1
-                if depth == 0:
-                    return i + 1, html[start : i + 1]
-        i += 1
-    raise ValueError("unclosed JSON blob in HTML")
+    decoder = (
+        json.JSONDecoder(parse_constant=lambda _const: None)
+        if opener == "{"
+        else json.JSONDecoder()
+    )
+    try:
+        _obj, end = decoder.raw_decode(html, start)
+    except json.JSONDecodeError as exc:
+        raise ValueError("unclosed JSON blob in HTML") from exc
+    return end, html[start:end]
 
 
 def _loads_js_json(raw: str) -> Any:
-    fixed = re.sub(r"\bNaN\b", "null", raw)
-    fixed = re.sub(r"\b-?Infinity\b", "null", fixed)
-    return json.loads(fixed)
+    decoder = json.JSONDecoder(parse_constant=lambda _const: None)
+    return decoder.decode(raw)
 
 
 def extract_layout(html: str) -> dict[str, Any]:
-    m = re.search(r'Plotly\.newPlot\(\s*"[^"]+"\s*,\s*(\[)', html)
-    if not m:
-        raise ValueError("Plotly.newPlot data not found")
-    data_end, _ = _extract_balanced(html, m.start(1))
-    rest = html[data_end:]
-    m2 = re.match(r"\s*,\s*(\{)", rest)
-    if not m2:
-        raise ValueError("Plotly layout object not found")
-    layout_start = data_end + m2.start(1)
-    _, raw = _extract_balanced(html, layout_start)
-    layout = _loads_js_json(raw)
-    if not isinstance(layout, dict):
-        raise TypeError("layout is not an object")
-    return layout
+    try:
+        _data, data_end = _decode_raw_traces(html)
+    except ValueError as exc:
+        if "not found" in str(exc):
+            raise ValueError("Plotly.newPlot data not found") from exc
+        raise
+    return decode_plotly_layout(html, data_end)
 
 
 def _is_fig1_overlay_marker(tr: dict[str, Any]) -> bool:

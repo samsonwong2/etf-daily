@@ -863,6 +863,9 @@ def oos_one(
     safe = pm.sanitize_name_for_filename(name)
     out = out_dir / f"regime_transition_{code}_{safe}_{start_tag}_{end_tag}_adaptive.html"
     write_adaptive_html(fig, out)
+    from etf_daily.lib.incremental_from_listing import stamp_fair_path_html
+
+    stamp_fair_path_html(out)
 
     trades_dir = out_dir / "trades"
     trades_dir.mkdir(parents=True, exist_ok=True)

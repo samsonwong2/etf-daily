@@ -312,6 +312,124 @@ def _score_month_symbol(
     )
 
 
+def _as_bool_values(values: pd.Series) -> np.ndarray:
+    """Match ``bool(cell)`` from ``DataFrame.iterrows``, including ``bool(nan)``."""
+    if values.dtype == bool:
+        return values.to_numpy(dtype=bool, copy=False)
+    out = np.empty(len(values), dtype=bool)
+    for i, value in enumerate(values.to_numpy(dtype=object)):
+        out[i] = False if value is None else bool(value)
+    return out
+
+
+def _text_values(values: pd.Series) -> np.ndarray:
+    """Match ``str(cell or "")`` except NaN, which stays ``\"nan\"`` (not equal to \"up\")."""
+    if len(values) == 0:
+        return np.array([], dtype=object)
+    raw = values.to_numpy(dtype=object)
+    out = np.empty(len(raw), dtype=object)
+    for i, value in enumerate(raw):
+        if value is None or value is False or value == "":
+            out[i] = ""
+        else:
+            out[i] = str(value)
+    return out
+
+
+def _numeric_col(frame: pd.DataFrame, name: str) -> np.ndarray:
+    if name not in frame.columns:
+        return np.full(len(frame), np.nan)
+    return pd.to_numeric(frame[name], errors="coerce").to_numpy(dtype=float)
+
+
+def _signal_levels(
+    frame: pd.DataFrame,
+    *,
+    meta: dict[str, Any],
+    q_hmm: float,
+    q_observe: float,
+) -> np.ndarray:
+    """Vectorized form of the per-row CONFIRM / OBSERVE / REJECT ladder."""
+    n = len(frame)
+    p = _numeric_col(frame, "p_trend_cal")
+    p_adj = _numeric_col(frame, "p_into_reversal_adj")
+    p_into = _numeric_col(frame, "p_into_reversal_hmm")
+    score = _numeric_col(frame, "transition_score")
+    rz = _numeric_col(frame, "return_z")
+    pred_cdf = _numeric_col(frame, "pred_cdf")
+    amb = (
+        _as_bool_values(frame["label_ambiguous"])
+        if "label_ambiguous" in frame.columns
+        else np.zeros(n, dtype=bool)
+    )
+    direction = (
+        _text_values(frame["transition_direction"])
+        if "transition_direction" in frame.columns
+        else np.full(n, "", dtype=object)
+    )
+    cand = (
+        _as_bool_values(frame["is_candidate"])
+        if "is_candidate" in frame.columns
+        else np.zeros(n, dtype=bool)
+    )
+    q_switch = (
+        _as_bool_values(frame["quantile_switch"])
+        if "quantile_switch" in frame.columns
+        else np.zeros(n, dtype=bool)
+    )
+    switch_side = (
+        _text_values(frame["switch_side"])
+        if "switch_side" in frame.columns
+        else np.full(n, "", dtype=object)
+    )
+    if "direction_up" in frame.columns:
+        up = _as_bool_values(frame["direction_up"]) | (direction == "up")
+    else:
+        up = direction == "up"
+
+    q_hmm_f = float(q_hmm)
+    q_observe_f = float(q_observe)
+    q_confirm = meta.get("q_confirm")
+    z_confirm = meta.get("z_confirm")
+    cdf_confirm = meta.get("cdf_confirm")
+    mature_ok = int(meta.get("n_crossfit_months", 0) or 0) >= 6
+    score_ok = np.isfinite(score)
+    rz_ok = np.isfinite(rz)
+    strong_jump = score_ok & (score >= 0.70) & (direction == "up") & rz_ok & (rz >= 2.0)
+    observe_hit = q_switch | strong_jump
+    hmm_ok = (
+        q_switch
+        | (np.isfinite(p_adj) & (p_adj >= q_hmm_f))
+        | (score_ok & (score >= 0.50) & (direction == "up") & rz_ok & (rz >= 1.5))
+    )
+    p_ok = np.isfinite(p)
+    side_up = switch_side == "up"
+    cal_confirm = np.zeros(n, dtype=bool)
+    if q_confirm is not None and mature_ok:
+        cal_confirm = (
+            cand & up & q_switch & side_up & p_ok & (p >= float(q_confirm)) & hmm_ok & ~amb
+        )
+    cdf_gate = np.zeros(n, dtype=bool)
+    if cdf_confirm is not None and mature_ok:
+        cdf_gate = q_switch & side_up & np.isfinite(pred_cdf) & (pred_cdf >= float(cdf_confirm))
+    z_gate = np.zeros(n, dtype=bool)
+    if z_confirm is not None and mature_ok:
+        z_gate = cand & up & q_switch & rz_ok & (rz >= float(z_confirm)) & hmm_ok & ~amb
+    confirm = cal_confirm | cdf_gate | z_gate
+    observe = observe_hit | (p_ok & (p >= q_observe_f))
+    reject_thr = float(q_confirm or q_observe_f)
+    reject = np.isfinite(p_into) & (p_into >= q_hmm_f) & p_ok & (p < reject_thr)
+
+    levels = np.full(n, "NONE", dtype=object)
+    levels[reject] = "REJECT_AS_ONE_DAY_JUMP"
+    levels[observe] = "OBSERVE"
+    levels[confirm] = "CONFIRM"
+    missing = ~p_ok
+    if missing.any():
+        levels[missing] = np.where(observe_hit[missing], "OBSERVE", "NONE")
+    return levels
+
+
 def _apply_calibration_and_signals(
     all_rows: pd.DataFrame,
     *,
@@ -519,106 +637,19 @@ def _apply_calibration_and_signals(
     z_confirm = thr.get("z_confirm")
     cdf_confirm = thr.get("cdf_confirm")
 
-    score_map = cross.set_index(["as_of", "code"])["p_trend_cal"]
-    raw_map = cross.set_index(["as_of", "code"])["p_trend_raw"]
     out = all_rows.copy()
-    keys = list(zip(out["as_of"].astype(str), out["code"].astype(str)))
-    out["p_trend_cal"] = [score_map.get(k, np.nan) for k in keys]
-    out["p_trend_raw"] = [raw_map.get(k, np.nan) for k in keys]
+    score_keys = cross.loc[:, ["as_of", "code", "p_trend_cal", "p_trend_raw"]].copy()
+    score_keys["as_of"] = score_keys["as_of"].astype(str)
+    score_keys["code"] = score_keys["code"].astype(str)
+    score_keys = score_keys.drop_duplicates(["as_of", "code"], keep="last")
+    left_keys = pd.DataFrame(
+        {"as_of": out["as_of"].astype(str), "code": out["code"].astype(str)}
+    )
+    joined = left_keys.merge(score_keys, on=["as_of", "code"], how="left")
+    out["p_trend_cal"] = joined["p_trend_cal"].to_numpy()
+    out["p_trend_raw"] = joined["p_trend_raw"].to_numpy()
     out["is_candidate"] = _candidate_mask(out)
-
-    levels: list[str] = []
-    for _, row in out.iterrows():
-        p = row.get("p_trend_cal")
-        p_adj = row.get("p_into_reversal_adj")
-        p_into = row.get("p_into_reversal_hmm")
-        amb = bool(row.get("label_ambiguous"))
-        score = row.get("transition_score")
-        direction = str(row.get("transition_direction") or "")
-        rz = row.get("return_z")
-        cand = bool(row.get("is_candidate"))
-        up = bool(row.get("direction_up")) or direction == "up"
-        q_switch = bool(row.get("quantile_switch"))
-        switch_side = str(row.get("switch_side") or "")
-        pred_cdf = row.get("pred_cdf")
-
-        # Locked design: predictive-quantile breach IS a regime switch → ≥ OBSERVE.
-        strong_jump = (
-            score is not None
-            and float(score) >= 0.70
-            and direction == "up"
-            and rz is not None
-            and math.isfinite(float(rz))
-            and float(rz) >= 2.0
-        )
-        observe_hit = q_switch or strong_jump
-
-        if p is None or (isinstance(p, float) and not math.isfinite(float(p))):
-            levels.append("OBSERVE" if observe_hit else "NONE")
-            continue
-        p = float(p)
-        hmm_ok = (
-            q_switch
-            or (
-                p_adj is not None
-                and math.isfinite(float(p_adj))
-                and float(p_adj) >= float(q_hmm)
-            )
-            or (
-                score is not None
-                and float(score) >= 0.50
-                and direction == "up"
-                and rz is not None
-                and math.isfinite(float(rz))
-                and float(rz) >= 1.5
-            )
-        )
-        # CONFIRM: selective nested gate on up-side switches.
-        cal_confirm = (
-            q_confirm is not None
-            and cand
-            and up
-            and q_switch
-            and switch_side == "up"
-            and p >= float(q_confirm)
-            and hmm_ok
-            and not amb
-            and meta.get("n_crossfit_months", 0) >= 6
-        )
-        cdf_gate_confirm = (
-            cdf_confirm is not None
-            and q_switch
-            and switch_side == "up"
-            and pred_cdf is not None
-            and math.isfinite(float(pred_cdf))
-            and float(pred_cdf) >= float(cdf_confirm)
-            and meta.get("n_crossfit_months", 0) >= 6
-        )
-        z_gate_confirm = (
-            z_confirm is not None
-            and cand
-            and up
-            and q_switch
-            and rz is not None
-            and math.isfinite(float(rz))
-            and float(rz) >= float(z_confirm)
-            and hmm_ok
-            and not amb
-            and meta.get("n_crossfit_months", 0) >= 6
-        )
-        if cal_confirm or cdf_gate_confirm or z_gate_confirm:
-            levels.append("CONFIRM")
-        elif observe_hit or p >= float(q_observe):
-            levels.append("OBSERVE")
-        elif (
-            p_into is not None
-            and float(p_into) >= float(q_hmm)
-            and p < float(q_confirm or q_observe)
-        ):
-            levels.append("REJECT_AS_ONE_DAY_JUMP")
-        else:
-            levels.append("NONE")
-    out["signal_level"] = levels
+    out["signal_level"] = _signal_levels(out, meta=meta, q_hmm=q_hmm, q_observe=q_observe)
     return out, meta
 
 
@@ -680,27 +711,50 @@ def evaluate_go_no_go(
     lift_ci_low = float("nan")
     if len(confirm) >= 10 and len(z_base) >= 10 and "month" in labeled.columns:
         rng = np.random.default_rng(42)
-        months = labeled["month"].astype(str).unique()
+        month_labels = labeled["month"].astype(str)
+        months = month_labels.unique()
+        month_index = pd.Series(np.arange(len(months)), index=pd.Index(months))
+        mi = month_index.loc[month_labels.to_numpy()].to_numpy(dtype=np.int32)
+        n_months = len(months)
+        label_up = labeled["label_trend_up"].astype(bool).to_numpy()
+        is_confirm = labeled["signal_level"].eq("CONFIRM").to_numpy()
+        has_cand = "is_candidate" in labeled.columns
+        cand = labeled["is_candidate"].astype(bool).to_numpy() if has_cand else None
+        z_hit = (
+            (pd.to_numeric(labeled["return_z"], errors="coerce") >= 2.5)
+            & labeled["direction_up"].astype(bool)
+        ).to_numpy(dtype=bool)
+        conf_n = np.zeros(n_months, dtype=np.int64)
+        conf_pos = np.zeros(n_months, dtype=np.int64)
+        cand_n = np.zeros(n_months, dtype=np.int64)
+        z_all_n = np.zeros(n_months, dtype=np.int64)
+        z_all_pos = np.zeros(n_months, dtype=np.int64)
+        z_cand_n = np.zeros(n_months, dtype=np.int64)
+        z_cand_pos = np.zeros(n_months, dtype=np.int64)
+        np.add.at(conf_n, mi[is_confirm], 1)
+        np.add.at(conf_pos, mi[is_confirm & label_up], 1)
+        np.add.at(z_all_n, mi[z_hit], 1)
+        np.add.at(z_all_pos, mi[z_hit & label_up], 1)
+        if cand is not None:
+            np.add.at(cand_n, mi[cand], 1)
+            z_on_cand = z_hit & cand
+            np.add.at(z_cand_n, mi[z_on_cand], 1)
+            np.add.at(z_cand_pos, mi[z_on_cand & label_up], 1)
         boots = []
         for _ in range(200):
             chosen = rng.choice(months, size=len(months), replace=True)
-            sub = labeled[labeled["month"].astype(str).isin(chosen)]
-            c = sub[sub["signal_level"] == "CONFIRM"]
-            sub_pool = sub
-            if "is_candidate" in sub.columns:
-                sp = sub[sub["is_candidate"].astype(bool)]
-                if len(sp) >= 20:
-                    sub_pool = sp
-            zb = sub_pool[
-                (pd.to_numeric(sub_pool["return_z"], errors="coerce") >= 2.5)
-                & (sub_pool["direction_up"].astype(bool))
-            ]
-            if len(c) < 5 or len(zb) < 5:
+            present = np.isin(months, chosen)
+            n_c = int(conf_n[present].sum())
+            if has_cand and int(cand_n[present].sum()) >= 20:
+                n_zb = int(z_cand_n[present].sum())
+                pos_zb = int(z_cand_pos[present].sum())
+            else:
+                n_zb = int(z_all_n[present].sum())
+                pos_zb = int(z_all_pos[present].sum())
+            if n_c < 5 or n_zb < 5:
                 continue
-            boots.append(
-                float(c["label_trend_up"].astype(bool).mean())
-                - float(zb["label_trend_up"].astype(bool).mean())
-            )
+            pos_c = int(conf_pos[present].sum())
+            boots.append(pos_c / n_c - pos_zb / n_zb)
         if boots:
             lift_ci_low = float(np.quantile(boots, 0.025))
 

@@ -1,8 +1,10 @@
 """Shared ex-dividend / split price adjustment (post-hoc qfq).
 
 Detects large single-day close jumps (e.g. ETF 除权) and rescales pre-jump
-history so return series stay continuous. Used across pipeline, Route A/B,
-forecast μ, pool builder, and backtest.
+history so return series stay continuous. Round splits (1/2, 1/3, 1/10, …)
+use that multiple, leaving the ex-day's own move on the bar. Other cliffs
+still use the close ratio. Used across pipeline, Route A/B, forecast μ,
+pool builder, and backtest.
 """
 from __future__ import annotations
 
@@ -10,14 +12,52 @@ import numpy as np
 import pandas as pd
 
 DEFAULT_QFQ_THRESHOLD = 0.25
+# Price multipliers (new/old), not simple returns. 5% relative tolerance.
+ROUND_SPLIT_RATIOS: tuple[float, ...] = (0.1, 0.2, 0.25, 1.0 / 3.0, 0.5, 2.0, 3.0, 4.0, 5.0, 10.0)
+SPLIT_RATIO_TOL = 0.05
 
 
-def _compute_cum_factors(close: np.ndarray, threshold: float) -> tuple[np.ndarray, list[dict[str, object]]]:
+def _snap_split_ratio(observed: float, *, tol: float = SPLIT_RATIO_TOL) -> float | None:
+    """Nearest common split multiple, or None when ``observed`` is not within ``tol``."""
+    if not np.isfinite(observed) or observed <= 0.0:
+        return None
+    best = min(ROUND_SPLIT_RATIOS, key=lambda ratio: abs(observed / ratio - 1.0))
+    if abs(observed / best - 1.0) <= tol:
+        return float(best)
+    return None
+
+
+def _step_split_ratio(close_ratio: float, open_ratio: float | None) -> tuple[float, bool]:
+    """One-step multiplier for a detected cliff, and whether it snapped to a round multiple.
+
+    Prefer the open/previous-close ratio when that print sits on a round split.
+    Otherwise snap the close ratio. A non-round cliff keeps the close ratio.
+    """
+    if open_ratio is not None:
+        snapped = _snap_split_ratio(open_ratio)
+        if snapped is not None:
+            return snapped, True
+    snapped = _snap_split_ratio(close_ratio)
+    if snapped is not None:
+        return snapped, True
+    return close_ratio, False
+
+
+def _compute_cum_factors(
+    close: np.ndarray,
+    threshold: float,
+    open_: np.ndarray | None = None,
+) -> tuple[np.ndarray, list[dict[str, object]]]:
     """Return per-row cumulative qfq factors and jump records for one price series.
 
     Walks backward over consecutive *valid* closes (skips NaN / non-positive holes)
     so an ETF 除权 cliff still fires when a missing bar sits between the pre/post
     prints (e.g. SH512690: 2021-05-14 NaN, 2021-05-17 −48% split).
+
+    A cliff is still detected from the close ratio. When that ratio (or the open
+    ratio) sits within 5% of a round split, history before the ex-day is scaled by
+    the round multiple so the ex-day's own move stays on the bar. Otherwise the
+    close ratio is used and the ex-day return is flattened.
     """
     n = len(close)
     cum_factor = np.ones(n, dtype=float)
@@ -39,15 +79,23 @@ def _compute_cum_factors(close: np.ndarray, threshold: float) -> tuple[np.ndarra
         newer_c = float(close[newer_i])
         older_c = float(close[older_i])
         newer_factor = float(cum_factor[newer_i])
-        adj_newer = newer_c * newer_factor
-        factor_here = adj_newer / older_c
-        rel = factor_here / newer_factor - 1.0
+        close_ratio = newer_c / older_c
+        rel = close_ratio - 1.0
         if abs(rel) > threshold:
+            open_ratio = None
+            if open_ is not None and newer_i < len(open_):
+                ov = float(open_[newer_i])
+                if np.isfinite(ov) and ov > 0.0:
+                    open_ratio = ov / older_c
+            step, snapped = _step_split_ratio(close_ratio, open_ratio)
+            factor_here = float(step) * newer_factor
             jumps.append(
                 {
                     "close_prev_raw": older_c,
                     "close_today_raw": newer_c,
-                    "raw_ratio_minus_1": float(newer_c / older_c - 1.0),
+                    "raw_ratio_minus_1": float(rel),
+                    "split_ratio": float(step),
+                    "snapped": bool(snapped),
                     "applied_factor": float(factor_here),
                     "_index": newer_i,
                 }
@@ -57,6 +105,13 @@ def _compute_cum_factors(close: np.ndarray, threshold: float) -> tuple[np.ndarra
         else:
             cum_factor[:newer_i] = newer_factor
     return cum_factor, jumps
+
+
+def _open_array(frame: pd.DataFrame) -> np.ndarray | None:
+    for name in ("$open", "open"):
+        if name in frame.columns:
+            return pd.to_numeric(frame[name], errors="coerce").to_numpy(dtype=float)
+    return None
 
 
 def auto_qfq_adjust_long_frame(
@@ -86,7 +141,7 @@ def auto_qfq_adjust_long_frame(
         grp_sorted = grp.sort_values(date_col)
         idx = grp_sorted.index.to_numpy()
         close = grp_sorted[close_col].astype(float).to_numpy()
-        cum_factor, jumps = _compute_cum_factors(close, threshold)
+        cum_factor, jumps = _compute_cum_factors(close, threshold, _open_array(grp_sorted))
         if np.allclose(cum_factor, 1.0):
             continue
 
@@ -188,7 +243,10 @@ def log_qfq_adjustments(records: pd.DataFrame, *, stage: str, max_samples: int =
     head = records.head(max_samples)
     samples = ", ".join(
         f"{row['code']}@{pd.Timestamp(row['datetime']).date()}"
-        f"(raw_ret={row['raw_ratio_minus_1']:+.2%}, f={row['applied_factor']:.3f})"
+        f"(raw_ret={row['raw_ratio_minus_1']:+.2%}, "
+        f"ratio={float(row['split_ratio']):.4g}, "
+        f"{'snap' if bool(row.get('snapped')) else 'close'}, "
+        f"f={row['applied_factor']:.3f})"
         for _, row in head.iterrows()
     )
     print(f"[INFO] {stage}: qfq adjusted {len(records)} jump(s). Sample: {samples}")

@@ -42,9 +42,8 @@ from etf_daily.lib.fair_path_band_signals import (  # noqa: E402
     find_regime_html,
     load_ohlcv_from_regime_html,
     load_qfq_close,
+    SKIP_CODES_NO_FIG7,
 )
-
-SKIP_CODES_NO_FIG7 = {"SH511010", "SH511260"}
 
 _SYMBOL_CACHE: dict[tuple[str, str, str], dict[str, Any]] = {}
 _FLAGS_CACHE: dict[tuple[str, str, str, float, str, str], pd.DataFrame] = {}

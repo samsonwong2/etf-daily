@@ -16,7 +16,10 @@ from etf_daily.lib.adaptive_stage_common import (
 
 
 def _load_ev():
-    path = Path(__file__).resolve().parents[1] / "scripts/eval_causal_regime_switch_pool.py"
+    path = (
+        Path(__file__).resolve().parents[1]
+        / "src/etf_daily/scripts/eval_causal_regime_switch_pool.py"
+    )
     spec = importlib.util.spec_from_file_location("ev_enter_up", path)
     mod = importlib.util.module_from_spec(spec)
     assert spec.loader is not None

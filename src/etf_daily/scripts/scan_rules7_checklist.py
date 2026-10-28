@@ -515,11 +515,6 @@ def write_markdown(path: Path, df: pd.DataFrame, *, as_of: pd.Timestamp, listing
         lines.append(f"| {label} | {len(hit)} | {names} |")
     lines.append("")
 
-    hold = holding.sort_values("_dist_stop", na_position="last") if "_dist_stop" in holding.columns else holding
-    lines += [f"## 持仓中：{len(hold)} 只", "", "按距回落止损从近到远排；不设回落的排在最后。", ""]
-    lines += _md_table(hold, ["代码", "名称", "聚类", "是否簇代表", "类型", "今日动作", "买入日", "买入价",
-                              "T收盘", "持仓浮盈", "回落止损价", "距止损", "本笔G1已触发", "卖点被G1屏蔽", "触发指标"])
-
     lines += _format_flat_buy_section(df, listing)
     near_stop = holding[holding["_dist_stop"] <= NEAR_WARN].sort_values("_dist_stop") if "_dist_stop" in holding.columns else holding.iloc[0:0]
     lines += [f"## 接近触发（{NEAR_WARN:.0%} 以内）", "",

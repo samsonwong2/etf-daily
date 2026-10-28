@@ -164,6 +164,7 @@ def build_fig12_figure(
         )
     )
 
+    shapes: list[dict[str, object]] = []
     runs = (st != st.shift()).cumsum()
     for _, seg in st.groupby(runs, sort=False):
         label = str(seg.iloc[0])
@@ -172,12 +173,19 @@ def build_fig12_figure(
             continue
         x0 = pd.Timestamp(seg.index[0])
         x1 = pd.Timestamp(seg.index[-1]) + pd.Timedelta(days=1)
-        fig.add_vrect(
-            x0=x0,
-            x1=x1,
-            fillcolor=color,
-            line_width=0,
-            layer="below",
+        shapes.append(
+            {
+                "type": "rect",
+                "xref": "x",
+                "yref": "y domain",
+                "x0": x0,
+                "x1": x1,
+                "y0": 0,
+                "y1": 1,
+                "fillcolor": color,
+                "line": {"width": 0},
+                "layer": "below",
+            }
         )
 
     for label in STATE_ORDER:
@@ -198,6 +206,7 @@ def build_fig12_figure(
         xaxis_rangeslider_visible=False,
         margin=dict(l=40, r=20, t=50, b=30),
         legend=dict(orientation="h", y=1.08),
+        shapes=shapes,
     )
     fig.update_xaxes(rangebreaks=[])
     return fig

@@ -8,7 +8,6 @@ Does NOT change production hold_up rules.
 """
 from __future__ import annotations
 
-import importlib.util
 import json
 import re
 import base64
@@ -28,6 +27,15 @@ FIG_PANELS: tuple[tuple[str, float, str], ...] = (
     ("fig10", 0.25, "3个月"),
     ("fig11", 1.0 / 12.0, "1个月"),
 )
+
+# fig7–fig10 overlay an EWMA residual rail on the expanding P95. fig11 does not.
+EWMA_OVERLAY_YEARS: frozenset[float] = frozenset(
+    years for key, years, _label in FIG_PANELS if key != "fig11"
+)
+
+# 5年国债 SH511010、10年国债 SH511260 是防御对冲腿。listing HTML 里同样有图7–11；
+# B123 扫描和回测跳过它们，因为清单是给权益趋势用的，不是因为缺面板。
+SKIP_CODES_NO_FIG7 = frozenset({"SH511010", "SH511260"})
 
 DEFAULT_DEEP_GAP = -0.15
 DEFAULT_MIN_RR = 2.0
@@ -60,52 +68,69 @@ def _walk_plotly_json(o: Any) -> Any:
     return o
 
 
-def _extract_plotly_traces(html: str) -> list[dict[str, Any]]:
-    m = re.search(r'Plotly\.newPlot\(\s*"[^"]+"\s*,\s*(\[)', html)
-    if not m:
+_NEWPLOT_DATA_RE = re.compile(r'Plotly\.newPlot\(\s*"[^"]+"\s*,\s*(\[)')
+_JS_CONST_DECODER = json.JSONDecoder(parse_constant=lambda _const: None)
+
+
+def _newplot_data_start(html: str) -> int:
+    match = _NEWPLOT_DATA_RE.search(html)
+    if not match:
         raise ValueError("Plotly.newPlot data array not found")
-    start = m.start(1)
-    i = start
-    depth = 0
-    in_str = False
-    esc = False
-    while i < len(html):
-        c = html[i]
-        if in_str:
-            if esc:
-                esc = False
-            elif c == "\\":
-                esc = True
-            elif c == '"':
-                in_str = False
-        else:
-            if c == '"':
-                in_str = True
-            elif c == "[":
-                depth += 1
-            elif c == "]":
-                depth -= 1
-                if depth == 0:
-                    end = i + 1
-                    break
-        i += 1
-    else:
-        raise ValueError("unclosed Plotly data array")
-    return _walk_plotly_json(json.loads(html[start:end]))
+    return match.start(1)
 
 
-def _plotly_x_to_index(x: Any) -> pd.DatetimeIndex:
-    arr = np.asarray(x)
-    if np.issubdtype(arr.dtype, np.number):
-        return pd.to_datetime(arr, unit="ms")
-    # Incremental HTML appends date-only last bars; Plotly history is ISO datetime.
-    return pd.to_datetime(arr, format="ISO8601")
+def _skip_ws(html: str, index: int) -> int:
+    n = len(html)
+    while index < n and html[index] in " \t\r\n":
+        index += 1
+    return index
 
 
-def load_ohlcv_from_regime_html(path: Path | str) -> tuple[pd.Series, pd.DataFrame]:
-    """Load qfq OHLCV from regime_transition HTML fig7 candlestick trace."""
-    html = Path(path).read_text(encoding="utf-8")
-    data = _extract_plotly_traces(html)
+def _decode_raw_traces(html: str) -> tuple[Any, int]:
+    """Parse the Plotly.newPlot data array. Returns (object, end index)."""
+    start = _newplot_data_start(html)
+    try:
+        data, end = json.JSONDecoder().raw_decode(html, start)
+    except json.JSONDecodeError as exc:
+        raise ValueError("unclosed Plotly data array") from exc
+    if not isinstance(data, list):
+        raise ValueError("Plotly.newPlot data array not found")
+    return data, end
+
+
+def decode_plotly_layout(html: str, data_end: int) -> dict[str, Any]:
+    """Parse the layout object that follows a Plotly.newPlot data array.
+
+    NaN / Infinity become null, matching the previous JS-tolerant loader.
+    """
+    index = _skip_ws(html, data_end)
+    if index >= len(html) or html[index] != ",":
+        raise ValueError("Plotly layout object not found")
+    index = _skip_ws(html, index + 1)
+    if index >= len(html) or html[index] != "{":
+        raise ValueError("Plotly layout object not found")
+    try:
+        layout, _end = _JS_CONST_DECODER.raw_decode(html, index)
+    except json.JSONDecodeError as exc:
+        raise ValueError("unclosed JSON blob in HTML") from exc
+    if not isinstance(layout, dict):
+        raise TypeError("layout is not an object")
+    return layout
+
+
+def _extract_plotly_traces(html: str) -> list[dict[str, Any]]:
+    data, _end = _decode_raw_traces(html)
+    walked = _walk_plotly_json(data)
+    if not isinstance(walked, list):
+        raise ValueError("Plotly.newPlot data array not found")
+    return walked
+
+
+def ohlcv_from_traces(
+    data: list[dict[str, Any]],
+    source: Path | str | None = None,
+) -> tuple[pd.Series, pd.DataFrame]:
+    """OHLCV from an already-parsed fig7 candlestick trace."""
     candle = None
     for tr in data:
         if tr.get("type") != "candlestick":
@@ -121,7 +146,8 @@ def load_ohlcv_from_regime_html(path: Path | str) -> tuple[pd.Series, pd.DataFra
                     candle = tr
                     break
     if candle is None:
-        raise ValueError(f"fig7 candlestick not found in {path}")
+        where = f" in {source}" if source else ""
+        raise ValueError(f"fig7 candlestick not found{where}")
     idx = _plotly_x_to_index(candle["x"])
     ohlcv = pd.DataFrame(
         {
@@ -137,6 +163,21 @@ def load_ohlcv_from_regime_html(path: Path | str) -> tuple[pd.Series, pd.DataFra
     return close, ohlcv
 
 
+def _plotly_x_to_index(x: Any) -> pd.DatetimeIndex:
+    arr = np.asarray(x)
+    if np.issubdtype(arr.dtype, np.number):
+        return pd.to_datetime(arr, unit="ms")
+    # Incremental HTML appends date-only last bars; Plotly history is ISO datetime.
+    return pd.to_datetime(arr, format="ISO8601")
+
+
+def load_ohlcv_from_regime_html(path: Path | str) -> tuple[pd.Series, pd.DataFrame]:
+    """Load qfq OHLCV from regime_transition HTML fig7 candlestick trace."""
+    html = Path(path).read_text(encoding="utf-8")
+    data = _extract_plotly_traces(html)
+    return ohlcv_from_traces(data, source=path)
+
+
 def find_regime_html(listing_dir: Path, code: str) -> Path | None:
     """Resolve regime_transition HTML for a symbol under listing_dir."""
     code = code.upper()
@@ -145,12 +186,8 @@ def find_regime_html(listing_dir: Path, code: str) -> Path | None:
 
 
 def _load_plot_mod():
-    path = _PROJECT_ROOT / "src/etf_daily/plots/plot_regime_transition_example.py"
-    spec = importlib.util.spec_from_file_location("plot_regime_pm_fp", path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"cannot load {path}")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    import etf_daily.plots.plot_regime_transition_example as mod
+
     return mod
 
 
@@ -206,7 +243,9 @@ def compute_multi_scale_frame(
             trail_years=float(years),
             min_bars=min_bars_fn(float(years)),
         )
-        upper, lower, _delta = pm.erp_path_symmetric_envelope(path, close)
+        upper, lower, _delta = pm.erp_path_symmetric_envelope(
+            path, close, min_bars=pm.rail_min_bars(float(years))
+        )
         out[f"{key}_path"] = path
         out[f"{key}_g"] = g
         out[f"{key}_upper"] = upper
@@ -406,6 +445,13 @@ def evaluate_checklist_row(
         res.verdict = "observe_no_entry"
     else:
         res.verdict = "neutral"
+
+    if (
+        listing_age_years is not None
+        and np.isfinite(listing_age_years)
+        and float(listing_age_years) < 2.0
+    ):
+        res.notes.append("图7窗口不足2年")
 
     return res
 
