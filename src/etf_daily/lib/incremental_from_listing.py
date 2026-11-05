@@ -21,10 +21,8 @@ import pandas as pd
 import plotly.graph_objects as go
 
 from etf_daily.lib.fair_path_band_signals import (
-    FIG_PANELS,
     _decode_plotly_bdata,
     _decode_raw_traces,
-    _extract_plotly_traces,
     _plotly_x_to_index,
     _walk_plotly_json,
     decode_plotly_layout,

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import pathlib
-from typing import Iterable
 
 import pandas as pd
 

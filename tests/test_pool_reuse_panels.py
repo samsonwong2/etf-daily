@@ -4,7 +4,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from etf_daily.pipeline.price_adjustments import auto_qfq_adjust_close_panel
+from etf_daily.data.price_adjustments import auto_qfq_adjust_close_panel
 from etf_daily.pool.builder.clustering import pairwise_overlap_matrices, subset_pairwise
 from etf_daily.pool.builder.data_loading import (
     panel_has_codes,

@@ -21,7 +21,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-_PROJECT_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
+_PROJECT_ROOT = next((p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file()), Path.cwd())
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT / "src"))
 
@@ -40,10 +40,10 @@ from etf_daily.lib.regime_transition_validation import (
     compute_dual_horizon_reversal_detail,
     match_alerts_to_events,
 )
-from etf_daily.pipeline.price_adjustments import auto_qfq_adjust_close_panel
-from etf_daily.pipeline.strategy_layer_audit import load_qlib_close
+from etf_daily.data.price_adjustments import auto_qfq_adjust_close_panel
+from etf_daily.data.qlib_loader import load_qlib_close
 from etf_daily.paths import FUND_LIST_CSV, QLIB_PROVIDER_URI
-from etf_daily.lib.generate_daily_mu_position_report import load_fund_name_map
+from etf_daily.data.fund_names import load_fund_name_map
 
 
 def _early_confirmation_counts(labeled: pd.DataFrame) -> dict[str, Any]:

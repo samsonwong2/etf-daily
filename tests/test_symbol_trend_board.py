@@ -6,15 +6,13 @@ import math
 import pandas as pd
 
 from etf_daily.lib.config import load_decision_pack_config
+from etf_daily.lib.portfolio import HoldingRow, PortfolioSnapshot
 from etf_daily.lib.indicators import (
     compute_trend_metrics,
     days_below_ma,
     ma_stack_label,
     vol_level_label,
 )
-from etf_daily.lib.orders import build_display_only_orders
-from etf_daily.lib.portfolio import HoldingRow, PortfolioSnapshot
-from etf_daily.lib.render import _trend_row_mark
 from etf_daily.lib.symbol_trend_board import (
     TREND_BOARD_COLUMNS,
     build_cluster_trend_board,
@@ -22,13 +20,7 @@ from etf_daily.lib.symbol_trend_board import (
     build_trend_board,
     load_cluster_mapping_codes,
 )
-from etf_daily.pipeline.price_adjustments import auto_qfq_adjust_close_panel
-
-
-def _rising_close(days: int = 180, start: float = 1.0, step: float = 0.01) -> pd.Series:
-    index = pd.bdate_range("2025-01-02", periods=days)
-    values = [start + step * i for i in range(days)]
-    return pd.Series(values, index=index, dtype=float)
+from etf_daily.data.price_adjustments import auto_qfq_adjust_close_panel
 
 
 def _portfolio_with_bond() -> PortfolioSnapshot:
@@ -47,6 +39,12 @@ def _portfolio_with_bond() -> PortfolioSnapshot:
         stock_mv=100000.0,
         equity_exposure=0.8,
     )
+
+
+def _rising_close(days: int = 180, start: float = 1.0, step: float = 0.01) -> pd.Series:
+    index = pd.bdate_range("2025-01-02", periods=days)
+    values = [start + step * i for i in range(days)]
+    return pd.Series(values, index=index, dtype=float)
 
 
 def test_ma_stack_labels():
@@ -236,16 +234,6 @@ def test_build_risk_flags_pnl7_and_dd5():
     assert "vol_accel" in parts
 
 
-def test_trend_row_mark_below_ma20_and_high_vol():
-    row = pd.Series(
-        {
-            "dist_ma20_pct": -1.0,
-            "risk_flags": "below_ma20|high_vol|loss",
-        }
-    )
-    assert _trend_row_mark(row) == "⚠⚠ "
-
-
 def test_qfq_smooths_ex_dividend_jump_for_returns():
     index = pd.bdate_range("2025-01-02", periods=40)
     raw = pd.Series(2.0, index=index, dtype=float)
@@ -260,10 +248,3 @@ def test_qfq_smooths_ex_dividend_jump_for_returns():
 
     assert raw_metrics["ret_20d"] is not None and raw_metrics["ret_20d"] < -0.4
     assert qfq_metrics["ret_20d"] is not None and abs(qfq_metrics["ret_20d"]) < 0.05
-
-
-def test_display_only_orders_hold_only():
-    orders = build_display_only_orders(_portfolio_with_bond())
-    assert (orders["action"] == "HOLD").all()
-    assert orders["sell_mv"].sum() == 0.0
-    assert (orders["reason"] == "display_only_v0").all()

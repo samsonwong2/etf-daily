@@ -1,27 +1,4 @@
-"""
-compare_cluster_pool.py
------------------------
-对比两个 cluster_mapping_selected.txt，生成新增/移除标的的详细报告。
-
-典型用法：
-    python 2_filter/compare_cluster_pool.py \
-        --old ~/etf-daily-output/Documents/stock/data/qlib_data/all_fund_data/instruments/cluster_mapping_selected_20250101_20251231.txt \
-        --new ~/etf-daily-output/Documents/stock/data/qlib_data/all_fund_data/instruments/cluster_mapping_selected.txt \
-        --cluster-map ~/etf-daily-output/gitee/skfolio_csi300/etf_strategy_clean/temp/cluster_mapping.csv
-
-    # 也可以同时指定 pool summary（production_cluster_pool_eval 的输出）
-    python 2_filter/compare_cluster_pool.py \
-        --old ~/etf-daily-output/Documents/stock/data/qlib_data/all_fund_data/instruments/cluster_mapping_selected_20250101_20251231.txt \
-        --new ~/etf-daily-output/Documents/stock/data/qlib_data/all_fund_data/instruments/cluster_mapping_selected.txt \
-        --cluster-map ~/etf-daily-output/gitee/skfolio_csi300/etf_strategy_clean/temp/cluster_mapping.csv \
-        --pool-summary ~/etf-daily-output/Documents/stock/gitee/skfolio_csi300/etf_strategy_cs/cluster_pool_rolling_eval/outputs/production_eval_20260422_172354/production_pool_summary.csv \
-        --pool-meta ~/etf-daily-output/Documents/stock/gitee/skfolio_csi300/etf_strategy_cs/cluster_pool_rolling_eval/outputs/production_eval_20260422_172354/applied_pool_metadata.json
-
-输出：
-    ~/etf-daily-output/Documents/stock/etf_strategy_pipeline/temp/cluster_pool_compare_reports/compare_<timestamp>.md
-    ~/etf-daily-output/Documents/stock/etf_strategy_pipeline/temp/cluster_pool_compare_reports/compare_<timestamp>_added.csv
-    ~/etf-daily-output/Documents/stock/etf_strategy_pipeline/temp/cluster_pool_compare_reports/compare_<timestamp>_removed.csv
-"""
+"""Compare two cluster_mapping_selected files and write added/removed reports."""
 
 import argparse
 import json
@@ -32,7 +9,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-OUTPUT_DIR = Path("~/etf-daily-output/Documents/stock/etf_strategy_pipeline/temp/cluster_pool_compare_reports")
+from etf_daily.paths import QLIB_INSTRUMENTS_DIR, TEMP_DIR
+
+OUTPUT_DIR = TEMP_DIR / "cluster_pool_compare_reports"
 
 
 def load_codes(path: str) -> list[str]:
@@ -465,7 +444,7 @@ def main():
     new_path = args.new
 
     # Auto-detect canonical path for shorthand inputs
-    instruments_dir = Path("~/etf-daily-output/Documents/stock/data/qlib_data/all_fund_data/instruments")
+    instruments_dir = QLIB_INSTRUMENTS_DIR
     if not Path(old_path).exists():
         candidate = instruments_dir / f"cluster_mapping_selected_{old_path}.txt"
         if candidate.exists():

@@ -13,7 +13,6 @@ from etf_daily.lib.regime_transition_bias_promotion import (
     eval_rule_bias,
     load_bias_promotion,
     lockbox_eligible,
-    run_candidate_race,
     score_candidate,
     write_bias_promotion_outputs,
 )

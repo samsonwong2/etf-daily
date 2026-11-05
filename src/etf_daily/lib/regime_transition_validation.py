@@ -48,7 +48,7 @@ def load_cluster_instruments(path: str | Any) -> list[InstrumentMembership]:
     """Parse qlib instruments txt: code\\tstart\\tend."""
     from pathlib import Path
 
-    from etf_daily.pipeline.strategy_layer_audit import normalize_code
+    from etf_daily.data.qlib_loader import normalize_code
 
     rows: list[InstrumentMembership] = []
     text = Path(path).read_text(encoding="utf-8")

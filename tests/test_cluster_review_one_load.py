@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from etf_daily.pipeline.price_adjustments import auto_qfq_adjust_close_panel
+from etf_daily.data.price_adjustments import auto_qfq_adjust_close_panel
 from etf_daily.pool.builder.audit import clip_to_end, qfq_window, window_bounds
 
 

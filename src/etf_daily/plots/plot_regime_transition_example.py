@@ -22,7 +22,7 @@ import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-_PROJECT_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
+_PROJECT_ROOT = next((p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file()), Path.cwd())
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT / "src"))
 
@@ -65,7 +65,7 @@ from etf_daily.lib.vol_need_return_board import (
     EQUITY_ANCHOR_LABEL,
 )
 from etf_daily.lib.plotly_html_autoscale import write_adaptive_html
-from etf_daily.pipeline.price_adjustments import (
+from etf_daily.data.price_adjustments import (
     DEFAULT_QFQ_THRESHOLD,
     auto_qfq_adjust_long_frame,
     log_qfq_adjustments,
@@ -1646,11 +1646,6 @@ def realized_cagr_chord(
         float(FAIR_PATH_LOG_TREND_TRAIL_YEARS)
         if trail_years is None
         else float(trail_years)
-    )
-    min_b = (
-        int(FAIR_PATH_LOG_TREND_MIN_BARS)
-        if min_bars is None
-        else max(2, int(min_bars))
     )
     trail_bars = (
         int(round(trail_y * tdy)) if np.isfinite(trail_y) and trail_y > 0 else 0

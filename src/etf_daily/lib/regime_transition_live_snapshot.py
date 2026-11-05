@@ -16,8 +16,8 @@ from typing import Any, Iterable, Sequence
 
 import pandas as pd
 
-from etf_daily.pipeline.price_adjustments import DEFAULT_QFQ_THRESHOLD
-from etf_daily.pipeline.strategy_layer_audit import normalize_code
+from etf_daily.data.price_adjustments import DEFAULT_QFQ_THRESHOLD
+from etf_daily.data.qlib_loader import normalize_code
 from etf_daily.paths import CLUSTER_MAPPING_SELECTED_TXT
 
 SNAPSHOT_COLUMNS = (

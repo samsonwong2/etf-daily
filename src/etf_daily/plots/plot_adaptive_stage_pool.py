@@ -14,7 +14,6 @@ Daily::
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
 import shutil
 import sys
@@ -26,7 +25,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-_PROJECT_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
+_PROJECT_ROOT = next((p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file()), Path.cwd())
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT / "src"))
 
@@ -36,7 +35,6 @@ from etf_daily.lib.adaptive_stage_common import (  # noqa: E402
     MIN_TRAIN_BARS,
     METHOD_IMPL_VERSION,
     NO_TRADE_BUY,
-    NO_TRADE_EXIT,
     PRIOR_K,
     REGIME_HOLD_UP_RULES,
     REGIME_SELECT_ENSEMBLE_CV,
@@ -65,7 +63,6 @@ from etf_daily.hrp.hrp_cluster_router import (  # noqa: E402
     DEFAULT_MEMBERSHIP_CSV,
     code_mode_map,
     load_cluster_membership,
-    mode_allows_diagnostic_marks,
     mode_allows_trade_overlay,
     paint_cluster_modes,
 )
@@ -149,20 +146,14 @@ def _hold_up_rules_cfg() -> dict[str, dict[str, Any]]:
 
 
 def _load_ev():
-    path = _PROJECT_ROOT / "src/etf_daily/scripts/eval_causal_regime_switch_pool.py"
-    spec = importlib.util.spec_from_file_location("ev_adaptive_pool", path)
-    mod = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(mod)
+    from etf_daily.scripts import eval_causal_regime_switch_pool as mod
+
     return mod
 
 
 def _load_pm():
-    path = _PROJECT_ROOT / "src/etf_daily/plots/plot_regime_transition_example.py"
-    spec = importlib.util.spec_from_file_location("pm_adaptive_pool", path)
-    mod = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(mod)
+    from etf_daily.plots import plot_regime_transition_example as mod
+
     return mod
 
 
@@ -1926,9 +1917,6 @@ def main(argv: list[str] | None = None) -> int:
         col = f"{st}_buy"
         if col in stats_df.columns:
             no_trade_n += int((stats_df[col] == NO_TRADE_BUY).sum())
-    low_n = stats_df[
-        (stats_df["up_n"].fillna(0) + stats_df["down_n"].fillna(0) + stats_df["range_n"].fillna(0)) < 8
-    ]
     sf = score_mode["score_field"]
     if trade_mode == TRADE_MODE_HOLD_UP:
         method_section = f"""## 方法

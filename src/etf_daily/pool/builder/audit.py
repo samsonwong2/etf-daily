@@ -28,14 +28,15 @@ from . import constants as C
 from . import data_loading as _dl
 from .config import load_shared_config
 
-_REPO_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
+_REPO_ROOT = next((p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file()), Path.cwd())
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT / "src"))
 
-from etf_daily.pipeline.price_adjustments import auto_qfq_adjust_close_panel, log_qfq_adjustments
+from etf_daily.data.price_adjustments import auto_qfq_adjust_close_panel, log_qfq_adjustments
+from etf_daily.paths import TEMP_DIR
 
 
-DEFAULT_INPUT_DIR = "~/etf-daily-output/Documents/stock/etf_strategy_pipeline/temp/etf_filter_checks"
+DEFAULT_INPUT_DIR = str(TEMP_DIR / "etf_filter_checks")
 DEFAULT_MAPPING_CSV = os.path.join(DEFAULT_INPUT_DIR, "cluster_mapping_etf.csv")
 DEFAULT_OUT_DIR = DEFAULT_INPUT_DIR
 DEFAULT_AUDIT_CSV = "missed_winner_audit_etf.csv"

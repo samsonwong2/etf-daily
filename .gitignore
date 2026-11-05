@@ -2,9 +2,15 @@ __pycache__/
 *.pyc
 .pytest_cache/
 *.egg-info/
+.ruff_cache/
+.venv/
+build/
+dist/
 config.env
+configs/paths.json
 configs/production_regime_switch_ewma_shrink.json
 temp/
 runtime/
 *.html
+*:Zone.Identifier
 .gstack/

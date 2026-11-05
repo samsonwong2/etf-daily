@@ -5,7 +5,6 @@ import time
 
 import numpy as np
 import pandas as pd
-import plotly.graph_objects as go
 import pytest
 from plotly.subplots import make_subplots
 
@@ -14,8 +13,18 @@ from etf_daily.lib.fair_path_band_signals import (
     compute_multi_scale_frame,
 )
 from etf_daily.lib.fair_path_research import ewma_scaled_envelope
-from etf_daily.lib.fair_path_tail_audit import GOLDEN_CODES
 from etf_daily.paths import PLOTLY_OUTPUTS_DIR
+
+GOLDEN_CODES = (
+    "SH511260",
+    "SH511090",
+    "SH510300",
+    "SH512530",
+    "SH513310",
+    "SH518880",
+    "SZ159502",
+    "SZ159985",
+)
 from etf_daily.plots.plot_regime_transition_example import (
     _add_own_log_trail_kline_row,
     causal_path_residual_signed_percentile,

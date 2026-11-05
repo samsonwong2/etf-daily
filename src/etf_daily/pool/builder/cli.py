@@ -17,7 +17,6 @@ from __future__ import annotations
 import argparse
 import shlex
 import subprocess
-import sys
 
 from . import constants as C
 from .filter_txt import filter_all_txt

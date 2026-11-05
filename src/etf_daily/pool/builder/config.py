@@ -10,7 +10,7 @@ from typing import Any
 try:
     from etf_daily.paths import FUND_LIST_CSV, PROJECT_ROOT, QLIB_PROVIDER_URI, TEMP_DIR, WORKSPACE_ROOT
 except ModuleNotFoundError:
-    project_root = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
+    project_root = next((p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file()), Path.cwd())
     sys.path.insert(0, str(project_root))
     from etf_daily.paths import FUND_LIST_CSV, PROJECT_ROOT, QLIB_PROVIDER_URI, TEMP_DIR, WORKSPACE_ROOT
 

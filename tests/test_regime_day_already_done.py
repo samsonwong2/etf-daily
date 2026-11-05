@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from etf_daily.pipeline.price_adjustments import auto_qfq_adjust_close_panel
+from etf_daily.data.price_adjustments import auto_qfq_adjust_close_panel
 from etf_daily.regime.backtest_regime_transition_signals import day_already_scored
 
 

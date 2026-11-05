@@ -4,17 +4,39 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "etf-daily"
-version = "0.1.0"
-description = "Daily ETF pool, regime, and adaptive HTML commands"
+version = "0.2.0"
+description = "Daily ETF pool, regime validation, listing HTML, and HRP commands"
+readme = "README.md"
 requires-python = ">=3.12"
-license = { text = "MIT" }
+license = "MIT"
+keywords = ["etf", "qlib", "regime", "portfolio"]
+classifiers = [
+  "Programming Language :: Python :: 3.12",
+  "Operating System :: POSIX :: Linux",
+]
 dependencies = [
   "pandas",
   "numpy",
   "plotly",
   "scipy",
+  "scikit-learn",
+  "statsmodels",
+  "arch",
   "skfolio",
+  "akshare",
+  "chardet",
+  "matplotlib",
+  "pyyaml",
+  "fire",
 ]
+
+[project.optional-dependencies]
+qlib = ["pyqlib"]
+dev = ["pytest", "ruff"]
+
+[project.urls]
+Homepage = "https://github.com/samsonwong2/etf-daily"
+Repository = "https://github.com/samsonwong2/etf-daily"
 
 [project.scripts]
 etf-daily = "etf_daily.cli:main"
@@ -22,6 +44,20 @@ etf-daily = "etf_daily.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+etf_daily = ["config/*.yaml", "pool/*.json"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+  "qlib: needs a local Qlib install and fund store",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["F401", "F841"]

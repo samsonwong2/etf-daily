@@ -12,14 +12,13 @@ import math
 import pickle
 import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
-_PROJECT_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
+_PROJECT_ROOT = next((p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file()), Path.cwd())
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT / "src"))
 
@@ -42,7 +41,6 @@ from etf_daily.lib.regime_transition_validation import (
     attach_instrument_names,
     audit_cluster_universe,
     build_expanding_crossfit_predictions,
-    canonical_config_hash,
     cluster_positive_events,
     compute_trend_up_label,
     eligible_codes_on_date,
@@ -61,9 +59,9 @@ from etf_daily.lib.regime_transition_live_snapshot import (
     load_live_snapshot,
     snapshot_meta,
 )
-from etf_daily.pipeline.strategy_layer_audit import load_qlib_close
+from etf_daily.data.qlib_loader import load_qlib_close
 from etf_daily.paths import CLUSTER_MAPPING_SELECTED_TXT, FUND_LIST_CSV, QLIB_PROVIDER_URI
-from etf_daily.lib.generate_daily_mu_position_report import load_fund_name_map
+from etf_daily.data.fund_names import load_fund_name_map
 
 CACHE_SCHEMA = "regime_frozen_hmm_v3"
 FEATURE_COLS = [
@@ -633,9 +631,6 @@ def _apply_calibration_and_signals(
         thr.setdefault("z_confirm", None)
         thr.setdefault("cdf_confirm", None)
     meta.update(thr)
-    q_confirm = thr.get("q_confirm")
-    z_confirm = thr.get("z_confirm")
-    cdf_confirm = thr.get("cdf_confirm")
 
     out = all_rows.copy()
     score_keys = cross.loc[:, ["as_of", "code", "p_trend_cal", "p_trend_raw"]].copy()
@@ -674,7 +669,6 @@ def evaluate_go_no_go(
 
     labeled = signals[signals["label_trend_up"].notna()].copy()
     confirm = labeled[labeled["signal_level"] == "CONFIRM"]
-    observe = labeled[labeled["signal_level"] == "OBSERVE"]
 
     # 0) switch-definition coverage (bilateral q*=0.90 ⇒ ~20% expected)
     if "quantile_switch" in signals.columns:

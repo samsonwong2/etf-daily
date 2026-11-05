@@ -30,7 +30,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 
-_PROJECT_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
+_PROJECT_ROOT = next((p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file()), Path.cwd())
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT / "src"))
 
@@ -39,7 +39,6 @@ from etf_daily.paths import PLOTLY_OUTPUTS_DIR  # noqa: E402
 from etf_daily.lib.fair_path_band_signals import (  # noqa: E402
     _decode_raw_traces,
     _extract_plotly_traces,
-    _plotly_x_to_index,
     decode_plotly_layout,
     load_ohlcv_from_regime_html,
 )

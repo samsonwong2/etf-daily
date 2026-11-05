@@ -26,7 +26,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-_PROJECT_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
+_PROJECT_ROOT = next((p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file()), Path.cwd())
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT / "src"))
 
@@ -36,12 +36,9 @@ from etf_daily.lib.fair_path_band_signals import (  # noqa: E402
     load_ohlcv_from_regime_html,
 )
 from etf_daily.lib.six_states import (  # noqa: E402
-    STATE_CHOP,
     STATE_DOWN,
     STATE_KNIFE,
     STATE_ORDER,
-    STATE_OVERHEAT,
-    STATE_REPAIR,
     STATE_UP,
     STATE_WARMUP,
     classify_six_states,

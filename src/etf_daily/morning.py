@@ -51,7 +51,7 @@ STOP_LINE = "STOP 这页不是今天。下面没有短名单。"
 
 
 def _project_root() -> Path:
-    return next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
+    return next((p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file()), Path.cwd())
 
 
 def parse_pool_codes(text: str) -> list[str]:

@@ -9,14 +9,14 @@ from typing import Literal
 
 import pandas as pd
 
-_PROJECT_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
+_PROJECT_ROOT = next((p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file()), Path.cwd())
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT / "src"))
 
 from etf_daily.lib.config import DecisionPackConfig, load_decision_pack_config
-from etf_daily.pipeline.strategy_layer_audit import load_qlib_close
+from etf_daily.data.qlib_loader import load_qlib_close
 from etf_daily.paths import QLIB_PROVIDER_URI
-from etf_daily.lib.generate_daily_mu_position_report import (  # noqa: E402
+from etf_daily.data.fund_names import (  # noqa: E402
     first_existing_column,
     load_fund_name_map,
     load_portfolio_weights,

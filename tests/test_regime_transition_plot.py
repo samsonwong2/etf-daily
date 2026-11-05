@@ -12,7 +12,6 @@ from etf_daily.lib.regime_transition_plot import (
     causal_action_label,
     classify_vol_pct_regime,
     collapse_reversal_marker_runs,
-    compute_realized_vol,
     compute_vol5_pct_120d,
     compute_volatility_regime_frame,
     dedupe_event_rows,
@@ -1056,7 +1055,6 @@ def test_trailing_log_trend_price_path_causal_and_adapts():
     spec.loader.exec_module(mod)
 
     # Flat then steep melt-up: full-window fit sits above late-flat prices.
-    n = 800
     close = pd.Series(np.concatenate([np.full(500, 10.0), np.linspace(10.0, 40.0, 300)]))
     full_path, _ = mod.log_trend_price_path(close, min_bars=10)
     trail_path, g_s = mod.trailing_log_trend_price_path(
@@ -1565,7 +1563,6 @@ def test_causal_own_cagr_series_and_path():
 
     # Trailing window: after trail_bars, g uses last trail_bars only (not full history).
     # Build a series that rises then flats so full-history g ≠ trailing g.
-    n2 = 300
     close2 = pd.Series(np.concatenate([np.linspace(10.0, 30.0, 150), np.full(150, 30.0)]))
     trail_bars = 100
     g_trail = mod.causal_own_cagr_series(
@@ -1767,7 +1764,7 @@ def test_build_candle_volume_vol_figure_optional_need_row():
         expected_path, ohlcv["$close"], q=0.95
     )
     assert np.isfinite(delta)
-    band_pct = float(np.exp(delta) - 1.0)
+    float(np.exp(delta) - 1.0)
     assert any(
         isinstance(n, str) and n.startswith("上轨") and "因果P95" in n
         for n in names7
@@ -2097,7 +2094,7 @@ def test_extreme_drop_note_in_candle_hover():
 
 def test_plot_ohlcv_qfq_removes_exdiv_cliff():
     """Plot OHLC qfq should smooth ETF 除权 cliffs the same way as signal closes."""
-    from etf_daily.pipeline.price_adjustments import auto_qfq_adjust_long_frame
+    from etf_daily.data.price_adjustments import auto_qfq_adjust_long_frame
 
     dates = pd.bdate_range("2026-07-10", periods=6)
     # Mimic SZ159320-style 3-for-1: 1.924 → open on 1/3, close 0.626 (about −2.4% after the split).

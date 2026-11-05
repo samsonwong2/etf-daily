@@ -259,7 +259,11 @@ def test_listing_20261019_matches_frozen_baseline():
     from etf_daily.lib.fair_path_band_signals import _extract_plotly_traces
 
     doc = json.loads(_BASELINE.read_text(encoding="utf-8"))
-    root = Path(doc["listing_dir"])
+    root = Path(doc["listing_dir"]).expanduser()
+    if not root.is_dir():
+        from etf_daily.paths import PLOTLY_OUTPUTS_DIR
+
+        root = PLOTLY_OUTPUTS_DIR / doc["listing_dir"]
     if not root.is_dir():
         pytest.skip(f"listing HTML dir missing: {root}")
     mismatches: list[str] = []

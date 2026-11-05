@@ -24,7 +24,6 @@ Example::
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
 import sys
 from pathlib import Path
@@ -34,7 +33,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 
-_PROJECT_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
+_PROJECT_ROOT = next((p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file()), Path.cwd())
 _SCRIPTS = Path(__file__).resolve().parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT / "src"))
@@ -61,12 +60,8 @@ KNIVES = ("none", "gap", "touch", "gap_touch")
 
 
 def _load_overlay():
-    path = _SCRIPTS / "overlay_oracle_pivots_on_regime_html.py"
-    spec = importlib.util.spec_from_file_location("overlay_oracle_pivots", path)
-    if spec is None or spec.loader is None:
-        raise ImportError(path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    from etf_daily.plots import overlay_oracle_pivots_on_regime_html as mod
+
     return mod
 
 

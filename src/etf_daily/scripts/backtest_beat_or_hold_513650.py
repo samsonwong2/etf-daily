@@ -29,7 +29,6 @@ Research only.
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
 import sys
 from pathlib import Path
@@ -38,7 +37,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
+_ROOT = next((p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file()), Path.cwd())
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT / "src"))
 
@@ -68,11 +67,16 @@ SEGMENTS = (
 
 
 def _load_mod(name: str, path: Path):
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec and spec.loader
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+    del name
+    if path.name == "plot_regime_transition_example.py":
+        from etf_daily.plots import plot_regime_transition_example as mod
+
+        return mod
+    if path.name == "eval_causal_regime_switch_pool.py":
+        from etf_daily.scripts import eval_causal_regime_switch_pool as mod
+
+        return mod
+    raise ImportError(path)
 
 
 def parse_args() -> argparse.Namespace:

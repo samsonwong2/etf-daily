@@ -8,7 +8,7 @@ from typing import Any
 
 import pandas as pd
 
-_PROJECT_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
+_PROJECT_ROOT = next((p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file()), Path.cwd())
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT / "src"))
 
@@ -21,12 +21,12 @@ from etf_daily.lib.indicators import (
     vol_percentile,
     window_return,
 )
-from etf_daily.pipeline.benchmark_regime import load_hs300_close
-from etf_daily.pipeline.price_adjustments import auto_qfq_adjust_close_panel
+from etf_daily.data.benchmark_regime import load_hs300_close
+from etf_daily.data.price_adjustments import auto_qfq_adjust_close_panel
 from etf_daily.lib.portfolio import HoldingRow, PortfolioSnapshot
-from etf_daily.pipeline.strategy_layer_audit import load_qlib_close
+from etf_daily.data.qlib_loader import load_qlib_close
 from etf_daily.paths import CLUSTER_MAPPING_SELECTED_TXT, QLIB_PROVIDER_URI
-from etf_daily.lib.generate_daily_mu_position_report import load_fund_name_map, normalize_code
+from etf_daily.data.fund_names import load_fund_name_map, normalize_code
 
 TREND_BOARD_COLUMNS = [
     "code",

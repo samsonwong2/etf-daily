@@ -82,7 +82,7 @@ if [[ "${code}" -ne 2 ]]; then
   exit 1
 fi
 grep -q 'cp config.env.example config.env' /tmp/etf-accept-err
-grep -q 'cp configs/production_regime_switch_ewma_shrink.json.example' /tmp/etf-accept-err
+grep -q 'cp configs/paths.example.json configs/paths.json' /tmp/etf-accept-err
 
 tmp="$(mktemp -d)"
 mkdir -p "${tmp}/src/20260720" "${tmp}/src/regime_transition_model_cache" "${tmp}/dest"

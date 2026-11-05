@@ -1,7 +1,6 @@
 """Tests for fair_path_band_signals (synthetic, no Qlib)."""
 from __future__ import annotations
 
-import importlib.util
 import sys
 from pathlib import Path
 

@@ -19,14 +19,6 @@
 #   # 子目录名默认是运行时刻 HHMMSS，不用设 OUT_STAMP。
 #   INTRADAY=1 AS_OF=2026-07-23 PY=... ./scripts/daily_regime_transition_validation.sh
 #
-# 可选：生成三角操作清单 OPS md（④ scan_triangle_decision_ops）:
-#   RUN_OPS_SCAN=1 AS_OF=2026-07-27 PY=... ./scripts/daily_regime_transition_validation.sh
-# 盘中完整链路（含 ④ OPS）:
-#   INTRADAY=1 RUN_OPS_SCAN=1 OUT_STAMP=103630 AS_OF=2026-07-28 PY=... ./scripts/daily_regime_transition_validation.sh
-# 已有盘中包，只补跑 ④:
-#   $PY src/etf_daily/regime/scan_triangle_decision_ops.py \\
-#     --pack-dir runtime/decision_packs/intraday/20260728/103630 --intraday --continue-on-error
-#
 # AS_OF: 信号截止日（含）。未设置时默认用系统今天。所有日期相关路径/参数均由此推导。
 # INTRADAY=1: 抓取冻结快照并写入 runtime/decision_packs/intraday/YYYYMMDD/<OUT_STAMP|HHMMSS>/
 set -euo pipefail
@@ -40,7 +32,6 @@ INTRADAY="${INTRADAY:-0}"
 PLOT_START="${PLOT_START:-2026-04-01}"
 SKIP_REBUILD="${SKIP_REBUILD:-0}"
 SKIP_HTML="${SKIP_HTML:-0}"
-RUN_OPS_SCAN="${RUN_OPS_SCAN:-0}"
 JOBS="${JOBS:-8}"
 FORCE_MONTH_REBUILD="${FORCE_MONTH_REBUILD:-0}"
 HTML_POOL_DIR="${HTML_POOL_DIR:-}"  # 默认 ~/etf-daily-output/temp/plotly_outputs/${AS_OF_TAG}all/
@@ -160,31 +151,7 @@ run_rebuild_and_plot() {
   fi
 }
 
-if [[ "${INTRADAY}" == "1" ]]; then
-  run_rebuild_and_plot
-
-  if [[ "${RUN_OPS_SCAN}" == "1" ]]; then
-    echo ""
-    echo "=== ④ triangle decision ops scan (intraday) ==="
-    "${PY}" src/etf_daily/regime/scan_triangle_decision_ops.py \
-      --pack-dir "${OUT_DIR}" \
-      --as-of "${AS_OF}" \
-      --intraday \
-      --continue-on-error
-  fi
-else
-  run_rebuild_and_plot
-
-  if [[ "${RUN_OPS_SCAN}" == "1" ]]; then
-    echo ""
-    echo "=== ④ triangle decision ops scan (guide next session) ==="
-    "${PY}" src/etf_daily/regime/scan_triangle_decision_ops.py \
-      --html-dir "${HTML_OUT_DIR}" \
-      --validation-dir "${OUT_DIR}" \
-      --as-of "${AS_OF}" \
-      --continue-on-error
-  fi
-fi
+run_rebuild_and_plot
 
 # ── 快速检查结果 ──────────────────────────────────────────
 echo ""
@@ -206,8 +173,5 @@ fi
 if [[ -n "${HTML_OUT_DIR}" && -d "${HTML_OUT_DIR}" ]]; then
   echo "HTML目录: ${HTML_OUT_DIR}"
   echo "HTML数量: $(find "${HTML_OUT_DIR}" -maxdepth 1 -name 'regime_transition_*.html' 2>/dev/null | wc -l)"
-fi
-if [[ "${RUN_OPS_SCAN}" == "1" ]]; then
-  echo "OPS扫描:  ${OUT_DIR}/triangle_decision_scan_${AS_OF_TAG}/"
 fi
 echo "go/no-go: $("${PY}" -c "import json; print(json.load(open('${OUT_DIR}/go_nogo.json'))['pass'])" 2>/dev/null || echo 'N/A')"

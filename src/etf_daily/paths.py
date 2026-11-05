@@ -1,8 +1,8 @@
 """Runtime path defaults for the portable ETF strategy project.
 
-Machine-specific paths live in ``configs/production_regime_switch_ewma_shrink.json``
-under the top-level ``paths`` object. Defaults are still derived from the copied
-project location if that file is missing or a key is omitted.
+Machine-specific paths live in ``configs/paths.json`` under the top-level
+``paths`` object. ``configs/production_regime_switch_ewma_shrink.json`` is still
+read when the new file is absent. Missing keys fall back to home-directory defaults.
 """
 from __future__ import annotations
 
@@ -11,9 +11,10 @@ from pathlib import Path
 from typing import Any
 
 
-PROJECT_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
+PROJECT_ROOT = next((p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file()), Path.cwd())
 WORKSPACE_ROOT = PROJECT_ROOT.parent
-DEFAULT_CONFIG_PATH = PROJECT_ROOT / "configs" / "production_regime_switch_ewma_shrink.json"
+_CONFIG_NAMES = ("paths.json", "production_regime_switch_ewma_shrink.json")
+DEFAULT_CONFIG_PATH = PROJECT_ROOT / "configs" / "paths.json"
 
 
 def _default_paths() -> dict[str, str]:
@@ -44,14 +45,23 @@ def _optional_path(value: object) -> Path | None:
     return Path(text).expanduser().resolve()
 
 
+def _active_config_path() -> Path | None:
+    for name in _CONFIG_NAMES:
+        path = PROJECT_ROOT / "configs" / name
+        if path.is_file():
+            return path
+    return None
+
+
 def _load_config_paths() -> dict[str, Any]:
-    if not DEFAULT_CONFIG_PATH.exists():
+    config_path = _active_config_path()
+    if config_path is None:
         return {}
-    with DEFAULT_CONFIG_PATH.open("r", encoding="utf-8") as handle:
+    with config_path.open("r", encoding="utf-8") as handle:
         payload = json.load(handle)
     paths = payload.get("paths", {})
     if not isinstance(paths, dict):
-        raise ValueError(f"Config paths must be a JSON object: {DEFAULT_CONFIG_PATH}")
+        raise ValueError(f"Config paths must be a JSON object: {config_path}")
     return paths
 
 

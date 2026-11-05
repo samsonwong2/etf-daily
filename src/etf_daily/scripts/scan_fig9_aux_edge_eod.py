@@ -25,7 +25,6 @@ Run from repo root (this project's Python)::
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import re
 import sys
 import traceback
@@ -35,7 +34,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-_PROJECT_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
+_PROJECT_ROOT = next((p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file()), Path.cwd())
 _SCRIPTS = Path(__file__).resolve().parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT / "src"))
@@ -68,12 +67,16 @@ DOC_NOTES: dict[str, str] = {
 
 
 def _load_mod(path: Path, name: str):
-    spec = importlib.util.spec_from_file_location(name, path)
-    if spec is None or spec.loader is None:
-        raise ImportError(path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+    del name
+    if path.name == "backtest_fig9_touch.py":
+        from etf_daily.scripts import backtest_fig9_touch as mod
+
+        return mod
+    if path.name == "run_reusable_extrema_state_machine.py":
+        from etf_daily.scripts import run_reusable_extrema_state_machine as mod
+
+        return mod
+    raise ImportError(path)
 
 
 def _resolve(path: Path) -> Path:

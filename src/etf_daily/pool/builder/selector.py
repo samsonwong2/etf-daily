@@ -264,7 +264,6 @@ def select_pool(
         )
         precomputed_corr = None
         precomputed_overlap = None
-    loaded_codes_before_cluster_drop = set(close.columns.tolist())
 
     current_cluster_drop_codes = _resolve_current_cluster_drop_codes(
         close,

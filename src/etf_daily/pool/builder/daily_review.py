@@ -17,7 +17,6 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
-from typing import List
 
 import numpy as np
 import pandas as pd
@@ -31,7 +30,6 @@ from .audit import (
     build_build_window_metrics,
     build_review_metrics_from_local_qlib,
     build_runtime_state,
-    compute_forward_metrics,
     compute_trailing_return_metrics,
     fetch_close_prices,
     load_mapping_csv,
@@ -42,11 +40,12 @@ from .audit import (
 from .code_utils import build_normalized_code_set, code_in_normalized_set, normalize_code
 from .compare import _df_to_md_table, build_report, load_codes_from_csv
 from .config import load_shared_config
+from etf_daily.paths import FUND_LIST_CSV
 from .data_loading import load_fund_list_universe
 
 
 DEFAULT_MAPPING_CSV = C.CSV_OUT
-DEFAULT_FUND_LIST_CSV = "~/etf-daily-output/Documents/stock/etf_strategy_pipeline/temp/fund_list.csv"
+DEFAULT_FUND_LIST_CSV = str(FUND_LIST_CSV)
 DEFAULT_SELECTED_CSV = C.CSV_SELECTED_OUT
 DEFAULT_OUT_BASE = os.path.join(C.OUT_DIR, "etf_filter_checks")
 DEFAULT_WINDOWS = "5,20,60"

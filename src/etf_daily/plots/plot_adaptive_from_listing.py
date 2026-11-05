@@ -40,7 +40,6 @@ Examples::
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
 import shutil
 import sys
@@ -51,7 +50,7 @@ from typing import Any
 
 import pandas as pd
 
-_PROJECT_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
+_PROJECT_ROOT = next((p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file()), Path.cwd())
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT / "src"))
 
@@ -78,22 +77,14 @@ DEFAULT_LISTING_CACHE = PLOTLY_OUTPUTS_DIR / "_listing_dates.csv"
 
 
 def _load_pm():
-    path = _PROJECT_ROOT / "src/etf_daily/plots/plot_regime_transition_example.py"
-    spec = importlib.util.spec_from_file_location("plot_regime_pm_listing", path)
-    assert spec is not None and spec.loader is not None
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    from etf_daily.plots import plot_regime_transition_example as mod
+
     return mod
 
 
 def _load_pool_main():
-    path = _PROJECT_ROOT / "src/etf_daily/plots/plot_adaptive_stage_pool.py"
-    spec = importlib.util.spec_from_file_location("plot_adaptive_pool_listing", path)
-    assert spec is not None and spec.loader is not None
-    mod = importlib.util.module_from_spec(spec)
-    # Keep a stable module name so nested imports resolve if needed.
-    sys.modules[spec.name] = mod
-    spec.loader.exec_module(mod)
+    from etf_daily.plots import plot_adaptive_stage_pool as mod
+
     return mod
 
 

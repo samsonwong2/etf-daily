@@ -40,7 +40,7 @@ from typing import Any, Callable
 import numpy as np
 import pandas as pd
 
-_PROJECT_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
+_PROJECT_ROOT = next((p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file()), Path.cwd())
 if str(_PROJECT_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT / "src"))
 
@@ -949,15 +949,12 @@ def eval_next_fast(ctx: FastCtx, px: float) -> dict[str, Any]:
     gap_5d = r5 - need5 if np.isfinite(r5) and np.isfinite(need5) else float("nan")
     gap_20d = r20 - need20 if np.isfinite(r20) and np.isfinite(need20) else float("nan")
 
-    locmin = False
     locmax = False
     lb = int(ctx.lookback)
     if n_hist >= lb and ctx.loc_window.size == lb and np.isfinite(c):
         w = np.empty(lb + 1, dtype=float)
         w[:-1] = ctx.loc_window
         w[-1] = c
-        if np.isfinite(c) and c == np.nanmin(w):
-            locmin = True
         if np.isfinite(c) and c == np.nanmax(w):
             locmax = True
 

@@ -267,7 +267,7 @@ def test_forward_filter_step_normalizes_and_bounds():
 
 
 def test_forward_filter_step_diagonal_near_zero_switch():
-    from etf_daily.lib.hmm_short_horizon import ForwardFilterStep, HmmFitResult, forward_filter_step
+    from etf_daily.lib.hmm_short_horizon import HmmFitResult, forward_filter_step
 
     fit = HmmFitResult(
         n_states=3,

@@ -1,11 +1,10 @@
 """Qfq split-ratio snapping: round multiples keep the ex-day move."""
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 import pytest
 
-from etf_daily.pipeline.price_adjustments import (
+from etf_daily.data.price_adjustments import (
     auto_qfq_adjust_close_panel,
     auto_qfq_adjust_long_frame,
 )

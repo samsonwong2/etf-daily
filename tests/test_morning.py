@@ -396,7 +396,7 @@ def test_validation_dir_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 def test_accept_eod_calls_morning():
     root = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
     text = (root / "scripts" / "accept_eod.sh").read_text(encoding="utf-8")
-    assert "-m etf_daily.morning" in text
+    assert "-m etf_daily morning" in text
 
 
 def test_real_listing_smoke():

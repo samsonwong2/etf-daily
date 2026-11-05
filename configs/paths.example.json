@@ -1,0 +1,16 @@
+{
+  "description": "Local data paths. Copy to configs/paths.json. Dates stay on the command line.",
+  "paths": {
+    "provider_uri": "~/.qlib/qlib_data/all_fund_data",
+    "qlib_scripts_dir": "",
+    "temp_dir": "~/etf-daily-output",
+    "workspace_dir": "{project_root}/runtime",
+    "log_dir": "{workspace_dir}/logs",
+    "plotly_outputs_dir": "~/etf-daily-output/plotly_outputs",
+    "local_library_dir": "",
+    "fund_list_csv": "{temp_dir}/fund_list.csv",
+    "qlib_change_csv_dir": "{provider_uri}/change_csv",
+    "all_instruments_txt": "{provider_uri}/instruments/all.txt",
+    "cluster_mapping_path": "{provider_uri}/instruments/cluster_mapping_selected.txt"
+  }
+}

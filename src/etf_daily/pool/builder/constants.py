@@ -12,7 +12,7 @@ from pathlib import Path
 try:
     from etf_daily.paths import ALL_INSTRUMENTS_TXT, CLUSTER_MAPPING_SELECTED_TXT, TEMP_DIR
 except ModuleNotFoundError:
-    project_root = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
+    project_root = next((p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file()), Path.cwd())
     sys.path.insert(0, str(project_root))
     from etf_daily.paths import ALL_INSTRUMENTS_TXT, CLUSTER_MAPPING_SELECTED_TXT, TEMP_DIR
 

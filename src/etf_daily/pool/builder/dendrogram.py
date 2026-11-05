@@ -4,7 +4,6 @@ from __future__ import annotations
 import os
 from typing import Iterable
 
-import matplotlib
 import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
 from scipy.cluster.hierarchy import dendrogram

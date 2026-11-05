@@ -63,12 +63,13 @@ def test_optional_paths_and_public_defaults() -> None:
 
 def test_missing_config_file_uses_none(tmp_path: Path) -> None:
     del tmp_path
-    cfg = ROOT / "configs" / "production_regime_switch_ewma_shrink.json"
-    hidden = cfg.with_suffix(".json.hidden-by-test")
-    moved = False
-    if cfg.exists():
-        cfg.rename(hidden)
-        moved = True
+    hidden_pairs: list[tuple[Path, Path]] = []
+    for name in ("paths.json", "production_regime_switch_ewma_shrink.json"):
+        cfg = ROOT / "configs" / name
+        if cfg.exists():
+            hidden = cfg.with_suffix(".json.hidden-by-test")
+            cfg.rename(hidden)
+            hidden_pairs.append((hidden, cfg))
     try:
         proc = subprocess.run(
             [
@@ -86,5 +87,5 @@ def test_missing_config_file_uses_none(tmp_path: Path) -> None:
         )
         assert proc.returncode == 0, proc.stderr
     finally:
-        if moved:
+        for hidden, cfg in reversed(hidden_pairs):
             hidden.rename(cfg)

@@ -18,7 +18,7 @@ from typing import Any, Literal
 import numpy as np
 import pandas as pd
 
-_PROJECT_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
+_PROJECT_ROOT = next((p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file()), Path.cwd())
 
 FIG_PANELS: tuple[tuple[str, float, str], ...] = (
     ("fig7", 2.0, "2年"),

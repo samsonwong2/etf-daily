@@ -25,14 +25,14 @@ from skfolio import RiskMeasure
 from skfolio.optimization import HierarchicalRiskParity
 from skfolio.preprocessing import prices_to_returns
 
-PROJECT_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
+PROJECT_ROOT = next((p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file()), Path.cwd())
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from etf_daily.pool.builder.constants import CLUSTER_LOOKBACK_DAYS, DIST_T
 from etf_daily.pool.builder.data_loading import load_data
 from etf_daily.paths import CLUSTER_MAPPING_SELECTED_TXT, FUND_LIST_CSV, QLIB_PROVIDER_URI
-from etf_daily.lib.generate_daily_mu_position_report import load_fund_name_map, normalize_code
+from etf_daily.data.fund_names import load_fund_name_map, normalize_code
 
 @dataclass
 class UniverseResult:
@@ -619,6 +619,67 @@ def plot_ward_dendrogram(
     return fig
 
 
+def style_hrp_no_heatmap(
+    fig,
+    *,
+    codependence: np.ndarray,
+    names: list[str] | np.ndarray,
+) -> None:
+    """Finer Distance ticks, plus a dashed line at the center pair's correlation.
+
+    Pearson distance is ``sqrt(0.5 * (1 - rho))``. That height matches a dendrogram
+    bar only when the bar joins those two leaves directly.
+    """
+    fig.update_yaxes(
+        tickmode="linear",
+        tick0=0,
+        dtick=0.1,
+        minor=dict(
+            tick0=0,
+            dtick=0.05,
+            ticks="outside",
+            ticklen=4,
+            showgrid=False,
+        ),
+    )
+    ticktext = fig.layout.xaxis.ticktext
+    raw_vals = fig.layout.xaxis.tickvals
+    labels = [] if ticktext is None else [str(label) for label in ticktext]
+    tickvals = [] if raw_vals is None else [float(val) for val in raw_vals]
+    if len(labels) < 2 or len(tickvals) != len(labels):
+        return
+    left_i = len(labels) // 2 - 1
+    right_i = len(labels) // 2
+    name_to_idx = {str(name): i for i, name in enumerate(names)}
+    left_name = labels[left_i]
+    right_name = labels[right_i]
+    if left_name not in name_to_idx or right_name not in name_to_idx:
+        return
+    rho = float(codependence[name_to_idx[left_name], name_to_idx[right_name]])
+    if not np.isfinite(rho):
+        return
+    height = float(np.sqrt(np.clip(0.5 * (1.0 - rho), 0.0, 1.0)))
+    fig.add_shape(
+        type="line",
+        x0=min(tickvals),
+        x1=max(tickvals),
+        y0=height,
+        y1=height,
+        line=dict(dash="dash", color="#b45309", width=1.5),
+        layer="above",
+    )
+    fig.add_annotation(
+        x=(tickvals[left_i] + tickvals[right_i]) / 2.0,
+        y=height,
+        text=f"{left_name} / {right_name}  ρ={rho:.2f}",
+        showarrow=False,
+        yshift=14,
+        bgcolor="white",
+        borderpad=2,
+        font=dict(size=12, color="#9a3412"),
+    )
+
+
 def fit_hrp_dendrograms(
     returns: pd.DataFrame,
     *,
@@ -644,6 +705,12 @@ def fit_hrp_dendrograms(
             height=layout_height,
             showlegend=False,
         )
+    distance = model.distance_estimator_
+    style_hrp_no_heatmap(
+        fig_no_heat,
+        codependence=np.asarray(distance.codependence_, dtype=float),
+        names=list(distance.feature_names_in_),
+    )
     return [
         ("HRP-CVaR reference (heatmap=False)", fig_no_heat),
         ("HRP-CVaR reference (heatmap=True)", fig_heat),

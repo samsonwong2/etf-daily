@@ -21,7 +21,6 @@ Example::
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
 import sys
 from pathlib import Path
@@ -30,7 +29,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-_PROJECT_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
+_PROJECT_ROOT = next((p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file()), Path.cwd())
 _SCRIPTS = Path(__file__).resolve().parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT / "src"))
@@ -57,12 +56,8 @@ DEFAULT_LEAVE_SOFT_FAIL_POS = 0.20
 
 
 def _load_sm():
-    path = _SCRIPTS / "run_reusable_extrema_state_machine.py"
-    spec = importlib.util.spec_from_file_location("extrema_sm", path)
-    if spec is None or spec.loader is None:
-        raise ImportError(path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    from etf_daily.scripts import run_reusable_extrema_state_machine as mod
+
     return mod
 
 
@@ -659,12 +654,9 @@ def write_report(
                 break
     buy_dates = []
     sell_dates = []
-    sell_kinds = []
     if shown is not None and not shown.empty:
         buy_dates = [str(x)[:10] for x in shown["signal_buy"].tolist()]
         sell_dates = [str(x)[:10] for x in shown["signal_sell"].tolist()]
-        if "sell_kind" in shown.columns:
-            sell_kinds = [str(x) for x in shown["sell_kind"].tolist()]
     notes: list[str] = []
     if any(d.startswith("2024-09") for d in buy_dates):
         notes.append(

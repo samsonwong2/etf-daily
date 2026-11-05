@@ -1180,7 +1180,6 @@ def format_regime_transition_row(
             return "—"
         return f"{float(v) * 100:.1f}%"
 
-    prev = metrics.prev_regime or "—"
     basis = metrics.basis
     if metrics.prev_regime and metrics.prev_regime != metrics.regime_now:
         basis = f"{basis}·{metrics.prev_regime}→{metrics.regime_now}"
