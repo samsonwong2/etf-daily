@@ -37,6 +37,8 @@ SNAPSHOT_OPTIONAL_COLUMNS = (
     "pct_chg",
 )
 SNAPSHOT_SOURCE = "akshare_sina_spot"
+# Halted names (停牌): Sina prints 最新价/OHLC/volume as 0 and keeps 昨收.
+SNAPSHOT_HALT_SOURCE = "akshare_sina_spot_halt"
 
 
 class LiveSnapshotError(ValueError):
@@ -90,7 +92,11 @@ def fetch_akshare_etf_spot_ohlcv(
     captured_at: str | None = None,
     spot_df: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
-    """Fetch (or parse) AkShare Sina ETF spot rows for ``codes`` on ``as_of``."""
+    """Fetch (or parse) AkShare Sina ETF spot rows for ``codes`` on ``as_of``.
+
+    A halted quote (最新价/OHLC/volume all non-positive, 昨收 still positive)
+    is kept as a flat bar at 昨收 with source ``akshare_sina_spot_halt``.
+    """
     wanted = sorted({normalize_code(c) for c in codes if normalize_code(c)})
     if not wanted:
         raise LiveSnapshotError("no codes requested for live snapshot")
@@ -124,14 +130,13 @@ def fetch_akshare_etf_spot_ohlcv(
     as_of_s = pd.Timestamp(as_of).normalize().strftime("%Y-%m-%d")
     wanted_set = set(wanted)
     by_code: dict[str, dict[str, Any]] = {}
+    halted: list[str] = []
 
     for _, row in spot_df.iterrows():
         code = _normalize_spot_code(row["代码"])
         if code not in wanted_set:
             continue
         close = _finite_positive(row["最新价"])
-        if close is None:
-            continue
         open_px = _finite_positive(row[open_col]) if open_col else None
         high_px = _finite_positive(row[high_col]) if high_col else None
         low_px = _finite_positive(row[low_col]) if low_col else None
@@ -144,6 +149,19 @@ def fetch_akshare_etf_spot_ohlcv(
             pct_raw = pd.to_numeric(row[pct_col], errors="coerce")
             if pd.notna(pct_raw) and math.isfinite(float(pct_raw)):
                 pct_chg = float(pct_raw)
+        source = SNAPSHOT_SOURCE
+        # 停牌: 最新价/OHLC/成交都是 0，昨收仍在。用昨收平盘，避免 strict coverage 缺码。
+        # 有今开或成交却没有最新价时不补，避免把残缺行情写成假价格。
+        vol_empty = pd.isna(vol) or float(vol) == 0.0
+        if close is None and pre_close is not None and vol_empty and open_px is None and high_px is None and low_px is None:
+            close = pre_close
+            open_px = high_px = low_px = pre_close
+            pct_chg = 0.0
+            vol = 0.0
+            source = SNAPSHOT_HALT_SOURCE
+            halted.append(code)
+        if close is None:
+            continue
         if open_px is None:
             open_px = close
         if high_px is None:
@@ -162,10 +180,16 @@ def fetch_akshare_etf_spot_ohlcv(
             "low": float(low_px),
             "close": float(close),
             "volume": float(vol) if pd.notna(vol) else float("nan"),
-            "source": SNAPSHOT_SOURCE,
+            "source": source,
             "pre_close": float(pre_close) if pre_close is not None else float("nan"),
             "pct_chg": float(pct_chg) if pct_chg is not None else float("nan"),
         }
+
+    if halted:
+        print(
+            f"[WARN] live snapshot carried {len(halted)} halted code(s) at 昨收 "
+            f"(no trade yet): {sorted(halted)}"
+        )
 
     if not by_code:
         raise LiveSnapshotError("AkShare spot returned no rows for requested codes")

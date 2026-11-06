@@ -280,6 +280,67 @@ def test_fetch_includes_pre_close_and_pct_chg():
     assert row["pct_chg"] == pytest.approx(4.463)
 
 
+def test_fetch_carries_halted_quote_at_pre_close():
+    """停牌: 最新价为 0、昨收仍在。用昨收平盘，strict coverage 不再缺码。"""
+    frame = fetch_akshare_etf_spot_ohlcv(
+        ["SZ159509", "SH513310", "SH511920"],
+        as_of="2026-11-06",
+        captured_at="2026-11-06T09:42:00",
+        spot_df=pd.DataFrame(
+            [
+                {
+                    "代码": "sz159509",
+                    "最新价": 0.0,
+                    "今开": 0.0,
+                    "最高": 0.0,
+                    "最低": 0.0,
+                    "成交额": 0,
+                    "昨收": 2.921,
+                    "涨跌幅": 0.0,
+                },
+                {
+                    "代码": "513310",
+                    "最新价": 5.50,
+                    "今开": 5.20,
+                    "最高": 5.60,
+                    "最低": 5.10,
+                    "成交额": 1.2e8,
+                    "昨收": 5.40,
+                    "涨跌幅": 1.85,
+                },
+                {
+                    # 最新价为 0 但已有今开：不是干净停牌，不补假价格。
+                    "代码": "511920",
+                    "最新价": 0.0,
+                    "今开": 99.997,
+                    "最高": 100.002,
+                    "最低": 99.96,
+                    "成交额": 0,
+                    "昨收": 100.002,
+                    "涨跌幅": 0.0,
+                },
+            ]
+        ),
+    )
+    assert set(frame["code"]) == {"SZ159509", "SH513310"}
+    row = frame.set_index("code").loc["SZ159509"]
+    assert row["close"] == pytest.approx(2.921)
+    assert row["open"] == pytest.approx(2.921)
+    assert row["high"] == pytest.approx(2.921)
+    assert row["low"] == pytest.approx(2.921)
+    assert row["volume"] == pytest.approx(0.0)
+    assert row["pct_chg"] == pytest.approx(0.0)
+    assert row["pre_close"] == pytest.approx(2.921)
+    assert row["source"] == "akshare_sina_spot_halt"
+    validate_snapshot(
+        frame,
+        as_of="2026-11-06",
+        required_codes=["SZ159509", "SH513310"],
+        strict_coverage=True,
+        require_today=False,
+    )
+
+
 def test_codes_requiring_live_coverage_skips_historical_only():
     from etf_daily.lib.regime_transition_live_snapshot import (
         codes_requiring_live_coverage,
