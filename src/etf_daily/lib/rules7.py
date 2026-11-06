@@ -36,6 +36,23 @@ FAST_RUN = 0.20
 FAST_RUN_BARS = 40
 FAST_LOOKBACK = 60
 
+FAST_BLOCKED = "快形态挡住"
+FAST_ACTIVE = "快形态中，未到买点"
+
+
+def fast_clear_bars(px: pd.Series) -> int:
+    """Bars until the fast pattern clears, assuming no new 20% run appears.
+
+    Returns 0 when the last bar is not in the fast pattern. The pattern holds
+    for ``FAST_LOOKBACK`` bars after the last 40-bar run of at least ``FAST_RUN``,
+    so an answer of N means the flag is gone N bars from now.
+    """
+    px = px.astype(float)
+    hit = np.flatnonzero((px / px.shift(FAST_RUN_BARS) - 1).to_numpy() >= FAST_RUN)
+    if hit.size == 0:
+        return 0
+    return max(int(hit[-1]) + FAST_LOOKBACK - (len(px) - 1), 0)
+
 
 @dataclass(frozen=True)
 class RuleSpec:
@@ -271,6 +288,23 @@ def _num(row: pd.Series, col: str) -> float:
     return float(v) if pd.notna(v) else float("nan")
 
 
+def _fig9_ewma_lower(frame: pd.DataFrame) -> pd.Series:
+    """Fig9 EWMA lower rail, same envelope the HTML overlay draws.
+
+    Missing when the frame has no fig9 path (synthetic tests) or the rail
+    is still inside its warmup. Observation only: not a rules7 input.
+    """
+    empty = pd.Series(np.nan, index=frame.index, dtype=float)
+    if "fig9_path" not in frame.columns or "px" not in frame.columns:
+        return empty
+    from etf_daily.lib.fair_path_research import DEFAULT_MIN_BARS, ewma_scaled_envelope
+
+    _upper, lower, _delta = ewma_scaled_envelope(
+        frame["fig9_path"], frame["px"], min_bars=int(DEFAULT_MIN_BARS),
+    )
+    return lower.reindex(frame.index)
+
+
 def _flag(row: pd.Series, col: str) -> bool:
     v = row.get(col)
     return bool(v) if pd.notna(v) else False
@@ -298,6 +332,14 @@ def indicator_snapshot(frame: pd.DataFrame, masks: dict[str, pd.Series], spec: R
     d["near_lo"] = bool(px <= lo9 * (1 + near))
     d["near_lo_prev"] = bool(_num(prev, "px") <= _num(prev, "fig9_lower") * (1 + near))
     d["near_lo_edge"] = d["near_lo"] and not d["near_lo_prev"]
+    lo_ewma = _fig9_ewma_lower(frame)
+    lo9e = float(lo_ewma.iloc[-1]) if len(lo_ewma) else float("nan")
+    lo9e_prev = float(lo_ewma.iloc[-2]) if len(lo_ewma) > 1 else float("nan")
+    px_prev = _num(prev, "px")
+    d["lo9_ewma"], d["dist_lo9_ewma"] = lo9e, px / lo9e - 1
+    d["near_lo_ewma"] = bool(np.isfinite(lo9e) and px <= lo9e * (1 + near))
+    near_lo_ewma_prev = bool(np.isfinite(lo9e_prev) and px_prev <= lo9e_prev * (1 + near))
+    d["near_lo_ewma_edge"] = d["near_lo_ewma"] and not near_lo_ewma_prev
     d["ma5"], d["ma20"] = ma5, ma20
     d["below_ma20"], d["ma5_below"] = bool(px < ma20), bool(ma5 < ma20)
     d["gap5"], d["gap20"] = gap5, gap20
@@ -309,6 +351,7 @@ def indicator_snapshot(frame: pd.DataFrame, masks: dict[str, pd.Series], spec: R
     d["disc_ok"] = bool(gap7 <= B1_GAP or gap8 <= B1_GAP)
     d["b1"] = bool(masks["b1"].iloc[-1])
     d["run40"], d["fast"] = float(run40), bool(masks["fast"].iloc[-1])
+    d["fast_clear_bars"] = fast_clear_bars(frame["px"]) if d["fast"] else 0
 
     d["hi9"], d["dist_hi9"] = hi9, px / hi9 - 1
     d["near_hi"] = bool(px >= hi9 * (1 - near))
@@ -347,14 +390,35 @@ def indicator_snapshot(frame: pd.DataFrame, masks: dict[str, pd.Series], spec: R
     return d
 
 
-def flat_buy_quote(snap: dict[str, Any], spec: RuleSpec, *, applicable: bool = True) -> tuple[float | None, str]:
-    """Price that counts as touching fig9's lower rail, plus why it is or isn't a buy.
+def flat_buy_quote(
+    snap: dict[str, Any],
+    spec: RuleSpec,
+    *,
+    applicable: bool = True,
+    rail: str = "p95",
+) -> tuple[float | None, str]:
+    """Price that counts as touching a fig9 lower rail, plus why it is or isn't a buy.
 
-    The price is ``fig9_lower × (1 + near)`` for this close only. It is filled for
-    every name, including names that are already long. It is not an intraday order.
+    ``rail="p95"`` (default) uses the causal P95 lower rail and the production
+    buy signal. ``rail="ewma"`` uses the fig9 EWMA lower rail and an
+    observation-only reading: today's edge plus the aux buy picture, or B1's
+    discount while already near that rail. The EWMA reading does not change
+    today's action. The price is ``lower × (1 + near)`` for this close only.
+    It is filled for every name, including names that are already long.
+    It is not an intraday order.
     """
+    if rail == "p95":
+        lo_key, near_key = "lo9", "near_lo"
+        buy_today = bool(snap.get("buy_signal"))
+    elif rail == "ewma":
+        lo_key, near_key = "lo9_ewma", "near_lo_ewma"
+        buy_today = (
+            bool(snap.get("near_lo_ewma_edge")) and bool(snap.get("aux_buy"))
+        ) or (spec.b1 and bool(snap.get("disc_ok")) and bool(snap.get(near_key)))
+    else:
+        raise ValueError(f"unknown rail {rail!r}")
     try:
-        price = float(snap.get("lo9")) * (1.0 + DEFAULT_NEAR_PCT)
+        price = float(snap.get(lo_key)) * (1.0 + DEFAULT_NEAR_PCT)
     except (TypeError, ValueError):
         price = float("nan")
     if not np.isfinite(price):
@@ -362,14 +426,18 @@ def flat_buy_quote(snap: dict[str, Any], spec: RuleSpec, *, applicable: bool = T
     if not applicable:
         return price, "规则不适用"
     if spec.fast_block and bool(snap.get("fast")):
-        return price, "快形态挡住"
-    if bool(snap.get("buy_signal")):
+        # buy_signal is already masked by fast, so look at the raw triggers too.
+        raw_trigger = buy_today or (rail == "p95" and (
+            bool(snap.get("ae_buy")) or (spec.b1 and bool(snap.get("b1")))
+        ))
+        return price, FAST_BLOCKED if raw_trigger else FAST_ACTIVE
+    if buy_today:
         return price, "今天已是买点"
-    if spec.b1 and bool(snap.get("disc_ok")) and not bool(snap.get("near_lo")):
+    if spec.b1 and bool(snap.get("disc_ok")) and not bool(snap.get(near_key)):
         return price, "贴轨即可"
     if not bool(snap.get("aux_buy")):
         return price, "辅助买像未齐"
-    if bool(snap.get("near_lo")):
+    if bool(snap.get(near_key)):
         return price, "已在带内，明天同价不算"
     return price, "还差这个价"
 

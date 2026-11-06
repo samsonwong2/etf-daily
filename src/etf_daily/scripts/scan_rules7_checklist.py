@@ -33,6 +33,7 @@ if str(_PROJECT_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT / "src"))
 
 from etf_daily.lib import rules7  # noqa: E402
+from etf_daily.lib.rules7_trade_plan import BREADTH_MIN_BARS, WATCH_Q, signal_trades  # noqa: E402
 from etf_daily.scripts import backtest_fig12_six_states_pool as pool  # noqa: E402
 
 TYPE_ORDER = [rules7.TYPE_SMOOTH, rules7.TYPE_TREND, rules7.TYPE_HIVOL, rules7.TYPE_CYCLE, rules7.TYPE_SHORT]
@@ -89,6 +90,9 @@ SNAP_COLS: list[tuple[str, Callable[[dict], str]]] = [
     ("图9下轨", _x("lo9")), ("距图9下轨", _p("dist_lo9")),
     ("图9近下轨(≤下轨×1.01)", _b("near_lo")), ("昨日近下轨", _b("near_lo_prev")),
     ("近下轨上跳沿", _b("near_lo_edge")),
+    ("图9 EWMA下轨", _x("lo9_ewma")), ("距图9 EWMA下轨", _p("dist_lo9_ewma")),
+    ("图9近EWMA下轨(≤下轨×1.01)", _b("near_lo_ewma")),
+    ("近EWMA下轨上跳沿", _b("near_lo_ewma_edge")),
     ("MA5", _x("ma5")), ("MA20", _x("ma20")),
     ("收盘<MA20", _b("below_ma20")), ("MA5<MA20", _b("ma5_below")),
     ("gap5", _p("gap5", 2)), ("gap5≤0", _b("gap5_le0")),
@@ -99,6 +103,7 @@ SNAP_COLS: list[tuple[str, Callable[[dict], str]]] = [
     ("图7折价", _p("gap7")), ("图8折价", _p("gap8")),
     ("图7或图8折价≤-8%", _b("disc_ok")), ("B1", _b("b1")),
     ("近60日最大40日涨幅", _p("run40")), ("快形态(≥20%)", _b("fast")),
+    ("快形态剩余K线", lambda d: str(int(d["fast_clear_bars"])) if d.get("fast") else ""),
     # sell: fig9
     ("图9上轨", _x("hi9")), ("距图9上轨", _p("dist_hi9")),
     ("图9近上轨(≥上轨×0.99)", _b("near_hi")), ("近上轨上跳沿", _b("near_hi_edge")),
@@ -126,7 +131,8 @@ SNAP_COLS: list[tuple[str, Callable[[dict], str]]] = [
 ]
 HEAD_COLS = (
     "代码", "名称", "T收盘", "类型", "类型来源", "买规则", "卖规则", "G1后不卖", "回落幅度",
-    "今日状态", "今日动作", "卖出原因", "触发指标", "买入信号", "买点价", "买点状态", "卖出信号",
+    "今日状态", "今日动作", "卖出原因", "触发指标", "买入信号", "买点价", "买点状态",
+    "EWMA买点价", "EWMA买点状态", "卖出信号",
     *CLUSTER_COLS,
 )
 POS_COLS = (
@@ -151,6 +157,7 @@ THRESHOLDS = [
      "持仓中触发后本笔不再按图9/图8 卖"),
     ("回落触发", "收盘 ≤ 持仓最高收盘 × (1 − 回落幅度)", "卖（规则设回落时）"),
     ("买点价", "收盘 ≤ 图9下轨 × 1.01", "全部标的都填，不是新的成交规则"),
+    ("EWMA买点价", "收盘 ≤ 图9 EWMA下轨 × 1.01", "观察表，不改变成交规则"),
 ]
 
 
@@ -175,6 +182,33 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--rewrite-from-csv",
         action="store_true",
         help="Skip HTML rescan; re-annotate existing checklist CSV with cluster columns and rewrite md",
+    )
+    p.add_argument(
+        "--no-trade-report",
+        action="store_true",
+        help="Do not write rules7_trade_report_*.md next to the checklist",
+    )
+    p.add_argument(
+        "--no-scenario",
+        action="store_true",
+        help="Do not scan the ±10% next-close scenario for the trade report",
+    )
+    p.add_argument(
+        "--breadth-filter",
+        choices=("on", "off"),
+        default="on",
+        help="Demote same-day P95 buys when they are under 5%% of the pool (default on)",
+    )
+    p.add_argument(
+        "--ledger",
+        type=Path,
+        default=None,
+        help="Signal ledger CSV. Default: {listing-dir parent}/rules7_signal_ledger.csv",
+    )
+    p.add_argument(
+        "--no-ledger",
+        action="store_true",
+        help="Do not append today's P95 buys to the signal ledger",
     )
     return p.parse_args(argv)
 
@@ -310,7 +344,41 @@ def build_frame(html: Path, listing: Path, anchor_code: str) -> pd.DataFrame:
     return prepare_fig9_touch_frame(frame)
 
 
-def scan_one(html: Path, *, listing: Path, as_of: pd.Timestamp, anchor_code: str) -> dict[str, Any]:
+def watch_columns(code: str, frame: pd.DataFrame, *, applicable: bool) -> dict[str, Any]:
+    """P90 observation tier: rules7 buy mask with the fig9 lower rail at P90.
+
+    ``fig9_lower`` is the expanding P95 of ``|ln(close/path)|`` below the path,
+    so any other quantile is recomputed from ``fig9_path`` and ``px``.
+    """
+    empty: dict[str, Any] = {"_w_buy_raw": False, "_w_lower": np.nan, "_w_dist": np.nan, "_w_trades": []}
+    if not applicable or "fig9_path" not in frame.columns:
+        return empty
+    try:
+        from etf_daily.lib.fair_path_research import DEFAULT_MIN_BARS, residual_p95_envelope
+        from etf_daily.scripts.backtest_fig9_touch import prepare_fig9_touch_frame
+
+        _hi, lower, _delta = residual_p95_envelope(
+            frame["fig9_path"], frame["px"], q=WATCH_Q, min_bars=int(DEFAULT_MIN_BARS),
+        )
+        alt = frame.copy()
+        alt["fig9_lower"] = lower
+        alt = prepare_fig9_touch_frame(alt)
+        res = rules7.evaluate(code, alt)
+        low = float(lower.iloc[-1])
+        px = float(frame["px"].iloc[-1])
+        trades = signal_trades(frame["px"], res["buy"])
+    except Exception:  # noqa: BLE001
+        return empty
+    return {
+        "_w_buy_raw": bool(res["buy"].iloc[-1]) if len(res["buy"]) else False,
+        "_w_lower": low,
+        "_w_dist": px / low - 1.0 if np.isfinite(low) and low > 0 else np.nan,
+        "_w_trades": trades,
+    }
+
+
+def scan_one(html: Path, *, listing: Path, as_of: pd.Timestamp, anchor_code: str,
+             scenario_on: bool = True) -> dict[str, Any]:
     code, name = pool.parse_html_label(html)
     frame = build_frame(html, listing, anchor_code)
     frame = frame.loc[frame.index <= as_of]
@@ -341,11 +409,15 @@ def scan_one(html: Path, *, listing: Path, as_of: pd.Timestamp, anchor_code: str
         "买入信号": _yn(snap["buy_signal"]),
         "卖出信号": _yn(snap["sell_signal"]),
     }
-    quote, quote_status = rules7.flat_buy_quote(
-        snap, spec, applicable=code.upper() not in rules7.NOT_APPLICABLE,
-    )
+    applicable = code.upper() not in rules7.NOT_APPLICABLE
+    quote, quote_status = rules7.flat_buy_quote(snap, spec, applicable=applicable)
     row["买点价"] = "" if quote is None else _px(quote)
     row["买点状态"] = quote_status
+    ewma_quote, ewma_status = rules7.flat_buy_quote(
+        snap, spec, applicable=applicable, rail="ewma",
+    )
+    row["EWMA买点价"] = "" if ewma_quote is None else _px(ewma_quote)
+    row["EWMA买点状态"] = ewma_status
     row["_html"] = html.name
     row.update({col: fmt(snap) for col, fmt in SNAP_COLS})
     row.update({
@@ -365,15 +437,46 @@ def scan_one(html: Path, *, listing: Path, as_of: pd.Timestamp, anchor_code: str
         "_type": res["type"],
         "_holding": st["holding"],
         "_dist_lo9": snap["dist_lo9"],
+        "_dist_ewma": snap.get("dist_lo9_ewma"),
         "_dist_stop": snap["dist_stop"],
         **{f"_t_{k}": bool(snap.get(k)) for k in rules7.TRIGGER_LABELS},
     })
+    trades = signal_trades(frame["px"], res["buy"]) if applicable else []
+    row["_sig_trades"] = trades
+    row["_plan_applicable"] = applicable
+    row["_bar250_date"] = (
+        pd.Timestamp(frame.index[BREADTH_MIN_BARS - 1]).strftime("%Y-%m-%d")
+        if len(frame) >= BREADTH_MIN_BARS else None
+    )
+    row["_last_date"] = pd.Timestamp(frame.index[-1]).strftime("%Y-%m-%d")
+    row["_recent_start"] = pd.Timestamp(frame.index[max(0, len(frame) - 60)]).strftime("%Y-%m-%d")
+    row["_buy_raw"] = bool(res["buy"].iloc[-1]) if len(res["buy"]) else False
+    row["_n_bars"] = int(len(frame))
+    tail: list[tuple[str, float]] = []
+    for ts, value in frame["px"].iloc[-25:].items():
+        price = float(value) if pd.notna(value) else float("nan")
+        tail.append((pd.Timestamp(ts).strftime("%Y-%m-%d"), price))
+    row["_px_tail"] = tail
+    row.update(watch_columns(code, frame, applicable=applicable))
+    row["_sc"] = None
+    if scenario_on:
+        try:
+            from etf_daily.lib.rules7_scenario import load_anchor_close, scenario
+
+            open_positions = [trade for trade in trades if trade.get("status") == "open"]
+            row["_sc"] = scenario(
+                code, frame, load_anchor_close(listing, anchor_code), open_positions,
+                applicable=applicable,
+            )
+        except Exception:  # noqa: BLE001
+            row["_sc"] = None
     return row
 
 
 def _worker(payload: dict[str, str]) -> dict[str, Any]:
     return scan_one(Path(payload["html"]), listing=Path(payload["listing"]),
-                    as_of=pd.Timestamp(payload["as_of"]), anchor_code=payload["anchor_code"])
+                    as_of=pd.Timestamp(payload["as_of"]), anchor_code=payload["anchor_code"],
+                    scenario_on=payload.get("scenario", "1") == "1")
 
 
 def _md_table(df: pd.DataFrame, cols: list[str]) -> list[str]:
@@ -415,51 +518,107 @@ def _spec_from_buy_text(text: Any) -> rules7.RuleSpec:
     )
 
 
+def _quote_snap(row: pd.Series, *, rail: str) -> dict[str, Any]:
+    shared = {
+        "fast": _yes_cell(row.get("快形态(≥20%)")),
+        "buy_signal": _yes_cell(row.get("买入信号")),
+        "ae_buy": _yes_cell(row.get("aux_edge买点")),
+        "b1": _yes_cell(row.get("B1")),
+        "disc_ok": _yes_cell(row.get("图7或图8折价≤-8%")),
+        "aux_buy": _yes_cell(row.get("辅助买像")),
+    }
+    if rail == "ewma":
+        lo = _f(row.get("图9 EWMA下轨"))
+        shared.update({
+            "lo9_ewma": float("nan") if lo is None else lo,
+            "near_lo_ewma": _yes_cell(row.get("图9近EWMA下轨(≤下轨×1.01)")),
+            "near_lo_ewma_edge": _yes_cell(row.get("近EWMA下轨上跳沿")),
+        })
+        return shared
+    lo = _f(row.get("图9下轨"))
+    shared.update({
+        "lo9": float("nan") if lo is None else lo,
+        "near_lo": _yes_cell(row.get("图9近下轨(≤下轨×1.01)")),
+    })
+    return shared
+
+
 def annotate_flat_buy_quotes(df: pd.DataFrame) -> pd.DataFrame:
-    """Fill 买点价 and 买点状态 on every row from that row's fig9 lower rail."""
+    """Fill both buy quotes from each row's fig9 lower rails.
+
+    The EWMA quote needs the EWMA columns already on the frame. A CSV written
+    before those columns existed is left blank rather than marked 无下轨.
+    """
     out = df.copy()
     prices: list[str] = []
     statuses: list[str] = []
+    ewma_prices: list[str] = []
+    ewma_statuses: list[str] = []
+    has_ewma = "图9 EWMA下轨" in out.columns
     for _, row in out.iterrows():
-        lo = _f(row.get("图9下轨"))
-        snap = {
-            "lo9": float("nan") if lo is None else lo,
-            "fast": _yes_cell(row.get("快形态(≥20%)")),
-            "buy_signal": _yes_cell(row.get("买入信号")),
-            "disc_ok": _yes_cell(row.get("图7或图8折价≤-8%")),
-            "aux_buy": _yes_cell(row.get("辅助买像")),
-            "near_lo": _yes_cell(row.get("图9近下轨(≤下轨×1.01)")),
-        }
         applicable = "规则不适用" not in str(row.get("类型", ""))
+        spec = _spec_from_buy_text(row.get("买规则"))
         quote, status = rules7.flat_buy_quote(
-            snap, _spec_from_buy_text(row.get("买规则")), applicable=applicable,
+            _quote_snap(row, rail="p95"), spec, applicable=applicable,
         )
         prices.append("" if quote is None else _px(quote))
         statuses.append(status)
+        if not has_ewma:
+            ewma_prices.append("")
+            ewma_statuses.append("")
+            continue
+        ewma_quote, ewma_status = rules7.flat_buy_quote(
+            _quote_snap(row, rail="ewma"), spec, applicable=applicable, rail="ewma",
+        )
+        ewma_prices.append("" if ewma_quote is None else _px(ewma_quote))
+        ewma_statuses.append(ewma_status)
     out["买点价"] = prices
     out["买点状态"] = statuses
+    out["EWMA买点价"] = ewma_prices
+    out["EWMA买点状态"] = ewma_statuses
     return out
 
 
-def _format_flat_buy_section(flat: pd.DataFrame, listing: Path) -> list[str]:
-    n_buy = int(flat["今日动作"].astype(str).eq("买").sum()) if "今日动作" in flat.columns else 0
-    lines = [
-        "## 空仓买点价",
-        "",
-        f"今天买入信号 **{n_buy}** 只。买入信号为 0 则今天不买。",
-        "买点价 = 图9下轨 × 1.01，持仓和空仓都填。持仓行的这个价格不产生新的买单。",
-        "不是盘中委托。成交仍是信号出现之后的下一根收盘，且只在当时空仓时成交。",
-        "已在带内的下一根收盘若仍在带内，不是新的 aux_edge。",
-        "",
-    ]
+def _format_flat_buy_rail(flat: pd.DataFrame, listing: Path, *, rail: str) -> list[str]:
+    """One flat-buy table, sorted by distance from today's close to that rail."""
+    if rail == "p95":
+        title = "## 空仓买点价（图9 因果P95下轨）"
+        price_col, status_col = "买点价", "买点状态"
+        rail_col, dist_col = "图9下轨", "距图9下轨"
+        n_buy = int(flat["今日动作"].astype(str).eq("买").sum()) if "今日动作" in flat.columns else 0
+        intro = [
+            f"今天买入信号 **{n_buy}** 只。买入信号为 0 则今天不买。",
+            "买点价 = 图9下轨 × 1.01，持仓和空仓都填。持仓行的这个价格不产生新的买单。",
+            "不是盘中委托。成交仍是信号出现之后的下一根收盘，且只在当时空仓时成交。",
+            "已在带内的下一根收盘若仍在带内，不是新的 aux_edge。",
+        ]
+    elif rail == "ewma":
+        title = "## 空仓买点价（图9 EWMA下轨）"
+        price_col, status_col = "EWMA买点价", "EWMA买点状态"
+        rail_col, dist_col = "图9 EWMA下轨", "距图9 EWMA下轨"
+        n_obs = (
+            int(flat[status_col].astype(str).eq("今天已是买点").sum())
+            if status_col in flat.columns else 0
+        )
+        intro = [
+            "和上面那张表是同一批标的，排序改成距图9 EWMA下轨。"
+            f"按这条轨看，今天观察买点 **{n_obs}** 只。",
+            "EWMA买点价 = 图9 EWMA下轨 × 1.01。这条下轨就是图9上的 EWMA 下轨："
+            "λ=0.94，带宽取历史 |残差|/σ 的 95 分位乘当天 σ。",
+            "持仓和空仓都填。持仓行的这个价格不产生新的买单。只作观察，不改今日动作、买入信号和成交。",
+            "不是盘中委托。下轨还没预热出来的标的排在表尾，状态是“无下轨”。",
+        ]
+    else:
+        raise ValueError(f"unknown rail {rail!r}")
+    lines = [title, "", *intro, ""]
     if flat.empty:
         return lines + ["（无）", ""]
     show = flat.copy()
-    if "买点价" not in show.columns:
-        show["买点价"] = ""
-    if "买点状态" not in show.columns:
-        show["买点状态"] = ""
-    show["_gap"] = [_gap_to_buy(px, buy) for px, buy in zip(show["T收盘"], show["买点价"])]
+    if price_col not in show.columns:
+        show[price_col] = ""
+    if status_col not in show.columns:
+        show[status_col] = ""
+    show["_gap"] = [_gap_to_buy(px, buy) for px, buy in zip(show["T收盘"], show[price_col])]
     show = show.sort_values("_gap", kind="mergesort")
     links = []
     for _, r in show.iterrows():
@@ -467,8 +626,15 @@ def _format_flat_buy_section(flat: pd.DataFrame, listing: Path) -> list[str]:
         links.append(f"[{r['代码']}]({html_name})" if html_name else str(r["代码"]))
     show = show.copy()
     show["代码"] = links
-    lines += _md_table(show, ["代码", "名称", "类型", "今日状态", "买点价", "买点状态", "T收盘", "图9下轨", "距图9下轨"])
+    lines += _md_table(show, ["代码", "名称", "类型", "今日状态", price_col, status_col, "T收盘", rail_col, dist_col])
     return lines
+
+
+def _format_flat_buy_section(flat: pd.DataFrame, listing: Path) -> list[str]:
+    """P95 table, then the same names sorted by the fig9 EWMA lower rail."""
+    return _format_flat_buy_rail(flat, listing, rail="p95") + _format_flat_buy_rail(
+        flat, listing, rail="ewma",
+    )
 
 
 def write_markdown(path: Path, df: pd.DataFrame, *, as_of: pd.Timestamp, listing: Path,
@@ -536,6 +702,7 @@ def write_markdown(path: Path, df: pd.DataFrame, *, as_of: pd.Timestamp, listing
         "",
         "- 今日动作看的是该标的所用规则：买入信号只在空仓时生效，卖出信号只在持仓且本笔未触发 G1 时生效（G1 后不卖的规则）。",
         "- 买点价 = 图9下轨 × 1.01，持仓和空仓都填。不是盘中委托。成交仍是信号日之后的下一根收盘，且只在当时空仓时成交。",
+        "- EWMA买点价 = 图9 EWMA下轨 × 1.01。图9 EWMA下轨就是图9上那条 EWMA 95 分位下轨（λ=0.94）。持仓和空仓都填，只作观察，不改今日动作、买入信号和成交。",
         "- 已在带内的下一根收盘若仍在带内，不是新的 aux_edge。",
         "- **推荐买入**：同一 HRP 簇内若多只同时出现买入信号，只标一只（优先簇代表，其次 |ret20| 更大，再次更贴近图9下轨）。未进聚类的买入信号各自保留。",
         "- 恒生医药 SZ159892 在文档里没有一套规则能真正赚钱，标为“规则不适用”，信号仅供参考。",
@@ -653,6 +820,7 @@ def main(argv: list[str] | None = None) -> int:
         rec = df[df.get("推荐买入", pd.Series(dtype=str)).fillna("").eq("是")]
         print(f"  推荐买入: {len(rec)}" + "".join(
             f"\n    {r['代码']} {r['名称']} 簇{r.get('聚类','')}" for _, r in rec.iterrows()))
+        print("[skip] --rewrite-from-csv 没有回放数据，不生成买卖报告", flush=True)
         return 0
 
     skipped_bonds: list[str] = []
@@ -667,7 +835,8 @@ def main(argv: list[str] | None = None) -> int:
             htmls.append(p)
     print("[skip bond]", ", ".join(skipped_bonds), flush=True)
     payloads = [{"html": str(h), "listing": str(listing), "as_of": as_of.strftime("%Y-%m-%d"),
-                 "anchor_code": str(args.anchor_code).upper()} for h in htmls]
+                 "anchor_code": str(args.anchor_code).upper(),
+                 "scenario": "0" if args.no_scenario else "1"} for h in htmls]
     labels = {str(h): pool.parse_html_label(h) for h in htmls}
 
     records: list[dict[str, Any]] = []
@@ -717,6 +886,20 @@ def main(argv: list[str] | None = None) -> int:
         rec = df[df["推荐买入"].fillna("").eq("是")]
         print(f"  推荐买入: {len(rec)}" + "".join(
             f"\n    {r['代码']} {r['名称']} 簇{r.get('聚类','')}" for _, r in rec.iterrows()))
+        if not args.no_trade_report:
+            from etf_daily.scripts.rules7_trade_report import write_trade_report
+
+            ledger_path = None
+            if not args.no_ledger:
+                ledger_path = args.ledger or (listing.parent / "rules7_signal_ledger.csv")
+            report = write_trade_report(
+                listing,
+                df,
+                as_of=as_of,
+                breadth_filter=args.breadth_filter != "off",
+                ledger_path=ledger_path,
+            )
+            print(f"[OK] {report}", flush=True)
     return 0
 
 
