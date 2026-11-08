@@ -62,30 +62,37 @@ def test_optional_paths_and_public_defaults() -> None:
 
 
 def test_missing_config_file_uses_none(tmp_path: Path) -> None:
-    del tmp_path
-    hidden_pairs: list[tuple[Path, Path]] = []
-    for name in ("paths.json", "production_regime_switch_ewma_shrink.json"):
-        cfg = ROOT / "configs" / name
-        if cfg.exists():
-            hidden = cfg.with_suffix(".json.hidden-by-test")
-            cfg.rename(hidden)
-            hidden_pairs.append((hidden, cfg))
-    try:
-        proc = subprocess.run(
-            [
-                sys.executable,
-                "-c",
-                "import etf_daily.paths as runtime_paths; "
-                "assert runtime_paths.QLIB_SCRIPTS_DIR is None; "
-                "assert runtime_paths.LOCAL_LIBRARY_DIR is None",
-            ],
-            cwd=ROOT,
-            env={**os.environ, "PYTHONPATH": str(ROOT / "src")},
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        assert proc.returncode == 0, proc.stderr
-    finally:
-        for hidden, cfg in reversed(hidden_pairs):
-            hidden.rename(cfg)
+    project = tmp_path / "project"
+    package = project / "src" / "etf_daily"
+    package.mkdir(parents=True)
+    (project / "pyproject.toml").write_text(
+        (ROOT / "pyproject.toml").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    (package / "__init__.py").write_text(
+        (ROOT / "src" / "etf_daily" / "__init__.py").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    (package / "paths.py").write_text(
+        (ROOT / "src" / "etf_daily" / "paths.py").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(project / "src")
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import etf_daily.paths as runtime_paths; "
+            "assert runtime_paths.QLIB_SCRIPTS_DIR is None; "
+            "assert runtime_paths.LOCAL_LIBRARY_DIR is None",
+        ],
+        cwd=project,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+    hidden = list((ROOT / "configs").glob("*.json.hidden-by-test"))
+    assert hidden == []

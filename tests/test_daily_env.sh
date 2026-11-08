@@ -24,38 +24,19 @@ if grep -n -- '--hrp-membership-csv' scripts/daily_adaptive_stage_html.sh | grep
   exit 1
 fi
 
-# Empty membership omits the flag. Checked below with a temporary config.env,
-# so a real local config.env does not leak into this assertion.
+# Empty membership omits the flag. The missing-config checks bind to a sandbox
+# copy of the scripts, so the checkout config.env stays in place.
 
-cfg="${ROOT}/config.env"
-json="${ROOT}/configs/production_regime_switch_ewma_shrink.json"
-cfg_bak=""
-json_bak=""
-restore() {
-  if [[ -n "${cfg_bak}" ]]; then
-    mv "${cfg_bak}" "${cfg}"
-  else
-    rm -f "${cfg}"
-  fi
-  if [[ -n "${json_bak}" ]]; then
-    mv "${json_bak}" "${json}"
-  fi
-}
-if [[ -f "${cfg}" ]]; then
-  cfg_bak="$(mktemp)"
-  mv "${cfg}" "${cfg_bak}"
-fi
-if [[ -f "${json}" ]]; then
-  json_bak="$(mktemp)"
-  mv "${json}" "${json_bak}"
-fi
-trap restore EXIT
+sandbox="$(mktemp -d)"
+mkdir -p "${sandbox}/scripts"
+cp scripts/daily_env.sh scripts/accept_eod.sh "${sandbox}/scripts/"
+trap 'rm -rf "${sandbox}"' EXIT
 
 # Public defaults when config.env is absent.
 (
   unset PY PLOTLY_ROOT HRP_OUTPUT_DIR HRP_MEMBERSHIP_CSV
   # shellcheck disable=SC1091
-  source scripts/daily_env.sh
+  source "${sandbox}/scripts/daily_env.sh"
   [[ "${PY}" == "python3" ]]
   [[ "${PLOTLY_ROOT}" == "${HOME}/etf-daily-output/plotly_outputs" ]]
   [[ "${HRP_OUTPUT_DIR}" == "${HOME}/etf-daily-output/decision_packs" ]]
@@ -63,7 +44,7 @@ trap restore EXIT
 )
 
 set +e
-PY=/bin/false ./scripts/accept_eod.sh >/tmp/etf-accept-out 2>/tmp/etf-accept-err
+PY=/bin/false "${sandbox}/scripts/accept_eod.sh" >/tmp/etf-accept-out 2>/tmp/etf-accept-err
 code=$?
 set -e
 if [[ "${code}" -eq 0 ]]; then
@@ -72,7 +53,7 @@ if [[ "${code}" -eq 0 ]]; then
 fi
 
 set +e
-PY=/bin/false ./scripts/accept_eod.sh --as-of 2026-09-23 --next-day 2026-09-24 \
+PY=/bin/false "${sandbox}/scripts/accept_eod.sh" --as-of 2026-09-23 --next-day 2026-09-24 \
   >/tmp/etf-accept-out 2>/tmp/etf-accept-err
 code=$?
 set -e
@@ -112,10 +93,10 @@ test -L "${ok}/regime_transition_model_cache"
 test -d "${ok}/regime_transition_model_cache"
 
 # A present config.env is sourced. An empty membership value is unset and adds no flag.
-printf 'PLOTLY_ROOT=/tmp/etf-daily-sourced-plotly\nHRP_MEMBERSHIP_CSV=\n' > "${cfg}"
+printf 'PLOTLY_ROOT=/tmp/etf-daily-sourced-plotly\nHRP_MEMBERSHIP_CSV=\n' > "${sandbox}/config.env"
 (
   # shellcheck disable=SC1091
-  source scripts/daily_env.sh
+  source "${sandbox}/scripts/daily_env.sh"
   [[ "${PLOTLY_ROOT}" == "/tmp/etf-daily-sourced-plotly" ]]
   [[ -z "${HRP_MEMBERSHIP_CSV+x}" ]]
   args=()
@@ -124,7 +105,7 @@ printf 'PLOTLY_ROOT=/tmp/etf-daily-sourced-plotly\nHRP_MEMBERSHIP_CSV=\n' > "${c
   fi
   [[ ${#args[@]} -eq 0 ]]
 )
-rm -f "${cfg}"
+rm -f "${sandbox}/config.env"
 
 pack_root="$(mktemp -d)"
 day="${pack_root}/20260928"
@@ -136,7 +117,7 @@ printf 'x\n' > "${day}/150000/live_snapshot.csv"
 printf 'x\n' > "${day}/150000/signals_oos.csv"
 (
   # shellcheck disable=SC1091
-  source scripts/daily_env.sh
+  source "${sandbox}/scripts/daily_env.sh"
   found="$(latest_intraday_pack "${day}")"
   [[ "${found}" == "${day}/150000" ]]
   empty="$(latest_intraday_pack "${pack_root}/missing")"
