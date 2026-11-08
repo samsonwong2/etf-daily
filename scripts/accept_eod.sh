@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run the end-of-day commands in handbook order, then the morning receipt.
+# Run etl, pool, cluster-review, regime, listing, hrp --dist-t 0.8, triggers, and the morning receipt.
 # Missing config.env or the local json exits before any Python process starts.
 set -euo pipefail
 

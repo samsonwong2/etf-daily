@@ -45,7 +45,7 @@ etf-daily rules7 --listing-dir "$PLOTLY_ROOT/20261026_from_listing"
 
 `listing` is incremental unless the shell is run with `INCREMENTAL=0`. Figure 12 runs unless `FIG12=0`.
 
-`scripts/accept_eod.sh --as-of YYYY-MM-DD --next-day YYYY-MM-DD` runs this order, then triggers and the morning receipt. It exits first if `config.env` or a paths json is missing.
+`scripts/accept_eod.sh --as-of YYYY-MM-DD --next-day YYYY-MM-DD` runs etl, pool, cluster-review for that date, regime, listing, `hrp --dist-t 0.8`, triggers, and the morning receipt. It exits first if `config.env` or a paths json is missing.
 
 ### `etf-daily etl`
 
