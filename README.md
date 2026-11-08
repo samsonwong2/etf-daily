@@ -28,7 +28,7 @@ That links `runtime/decision_packs/20260720` and `runtime/decision_packs/regime_
 
 ## Daily order
 
-Run these in order. `listing` reads frozen hold-up configs from `$PLOTLY_ROOT/_train_cache` and trains any pool name that cache does not have yet. It does not read `{YYYYMMDD}all_adaptive`.
+Run these by hand for a research day. `listing` reads frozen hold-up configs from `$PLOTLY_ROOT/_train_cache` and trains any pool name that cache does not have yet. It does not read `{YYYYMMDD}all_adaptive`.
 
 Only `listing` writes the HTML under `$PLOTLY_ROOT/20261026_from_listing`. The date comes from `--as-of`. The other commands write fund data, a candidate pool, cluster tables, a regime signal shard, an HRP page, or a checklist.
 
@@ -45,7 +45,14 @@ etf-daily rules7 --listing-dir "$PLOTLY_ROOT/20261026_from_listing"
 
 `listing` is incremental unless the shell is run with `INCREMENTAL=0`. Figure 12 runs unless `FIG12=0`.
 
-`scripts/accept_eod.sh --as-of YYYY-MM-DD --next-day YYYY-MM-DD` runs this order, then triggers and the morning receipt. It exits first if `config.env` or a paths json is missing.
+`scripts/accept_eod.sh` is the automated close. It does not run the list above. It runs eight commands: `etl`, `pool`, `cluster-review`, `regime` with `--skip-rebuild` and `--skip-html`, `listing`, `hrp --dist-t 0.8`, `triggers`, and `morning`. It does not run `rules7`. It does not draw the default-distance HRP page. `morning` checks the `_d080` page. `--print-plan` prints those eight commands and does not start Python. The script still exits first if `config.env` or a paths json is missing.
+
+```bash
+scripts/accept_eod.sh --as-of 2026-10-26 --next-day 2026-10-27 --print-plan
+scripts/accept_eod.sh --as-of 2026-10-26 --next-day 2026-10-27
+```
+
+`--next-day` is the next trading session. The script does not know exchange holidays, and it does not rewrite the date to the next weekday. Pass the real session when that session is later than the next weekday. `etf-daily triggers` is different when you omit `--next-day`. That command fills the next weekday and skips Saturday and Sunday only.
 
 ### `etf-daily etl`
 
@@ -101,7 +108,7 @@ Not part of the daily order. Draws the adaptive-stage HTML for the cluster-selec
 
 ### `etf-daily triggers --listing-dir "$PLOTLY_ROOT/YYYYMMDD_from_listing"`
 
-Writes next-session trigger prices into that directory. When `--as-of` and `--next-day` are omitted, the date in the directory name is T and T+1 is the next weekday. Pass `--next-day` when the next session is not the next weekday.
+Writes next-session trigger prices into that directory. When `--as-of` and `--next-day` are omitted, the date in the directory name is T and T+1 is the next weekday. That fill skips Saturday and Sunday only. It does not know exchange holidays. Pass `--next-day` when the next session is not the next weekday. `scripts/accept_eod.sh` always requires `--next-day` and passes that date through.
 
 ### `etf-daily b1235` and `etf-daily b1235-backtest`
 

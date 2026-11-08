@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+`scripts/accept_eod.sh --print-plan` prints the eight commands the close actually runs. `rules7` and the default-distance HRP page stay out of that script. The README research list still includes both. `--next-day` is the next trading session. The script does not rewrite it to the next weekday.
+
+Developer notes for the pstack Cursor plugin live in `docs/pstack.md`. The plugin is not a package dependency.
+
 ## 0.2.0
 
 `rules7` buy status now says `快形态挡住` only when a real aux_edge or B1 buy was blocked today. A name in the fast pattern with no buy trigger reads `快形态中，未到买点`. The checklist adds `快形态剩余K线`, the bars until the fast pattern clears if no new 20% run appears.

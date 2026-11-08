@@ -70,19 +70,29 @@ if [[ "${code}" -eq 0 ]]; then
   echo "accept_eod without dates exited 0" >&2
   exit 1
 fi
+grep -q 'exchange holidays' /tmp/etf-accept-err
+grep -q 'does not rewrite --next-day' /tmp/etf-accept-err
+if grep -q 'etf-daily etl' /tmp/etf-accept-out; then
+  echo "accept_eod printed a plan before dates were present" >&2
+  exit 1
+fi
 
 set +e
-PY=/bin/false ./scripts/accept_eod.sh --as-of 2026-09-23 --next-day 2026-09-24 \
+PY=/bin/false ./scripts/accept_eod.sh --as-of 2026-09-23 --next-day 2026-09-24 --print-plan \
   >/tmp/etf-accept-out 2>/tmp/etf-accept-err
 code=$?
 set -e
 if [[ "${code}" -ne 2 ]]; then
-  echo "accept_eod missing config exited ${code}, want 2" >&2
+  echo "accept_eod --print-plan without config exited ${code}, want 2" >&2
   cat /tmp/etf-accept-err >&2
   exit 1
 fi
 grep -q 'cp config.env.example config.env' /tmp/etf-accept-err
 grep -q 'cp configs/paths.example.json configs/paths.json' /tmp/etf-accept-err
+if grep -q 'etf-daily etl' /tmp/etf-accept-out; then
+  echo "print-plan ran before config existed" >&2
+  exit 1
+fi
 
 tmp="$(mktemp -d)"
 mkdir -p "${tmp}/src/20260720" "${tmp}/src/regime_transition_model_cache" "${tmp}/dest"
@@ -112,7 +122,44 @@ test -L "${ok}/regime_transition_model_cache"
 test -d "${ok}/regime_transition_model_cache"
 
 # A present config.env is sourced. An empty membership value is unset and adds no flag.
-printf 'PLOTLY_ROOT=/tmp/etf-daily-sourced-plotly\nHRP_MEMBERSHIP_CSV=\n' > "${cfg}"
+printf 'PY=/bin/false\nPLOTLY_ROOT=/tmp/etf-daily-sourced-plotly\nHRP_OUTPUT_DIR=/tmp/etf-print-plan/hrp\nTEMP_DIR=/tmp/etf-print-plan/temp\nHRP_MEMBERSHIP_CSV=\n' > "${cfg}"
+paths_json="${ROOT}/configs/paths.json"
+paths_made=0
+if [[ ! -f "${paths_json}" ]]; then
+  printf '%s\n' '{ "paths": {} }' > "${paths_json}"
+  paths_made=1
+fi
+PY=/bin/false ./scripts/accept_eod.sh \
+  --as-of 2026-10-02 \
+  --next-day 2026-10-08 \
+  --print-plan >/tmp/etf-plan-out 2>/tmp/etf-plan-err
+if [[ "${paths_made}" == 1 ]]; then
+  rm -f "${paths_json}"
+fi
+python3 - <<'PY'
+from pathlib import Path
+text = Path("/tmp/etf-plan-out").read_text(encoding="utf-8").splitlines()
+want = [
+    "1 etf-daily etl",
+    "2 etf-daily pool",
+    "3 etf-daily cluster-review --future-end 2026-10-02 --selected-csv /tmp/etf-print-plan/temp/cluster_mapping_selected.csv --mapping-csv /tmp/etf-print-plan/temp/cluster_mapping.csv",
+    "4 etf-daily regime --as-of 2026-10-02 --skip-rebuild --skip-html",
+    "5 etf-daily listing --as-of 2026-10-02",
+    "6 etf-daily hrp --dist-t 0.8 --as-of 2026-10-02",
+    "7 etf-daily triggers --listing-dir /tmp/etf-daily-sourced-plotly/20261002_from_listing --as-of 2026-10-02 --next-day 2026-10-08 --jobs 8",
+    "8 etf-daily morning --as-of 2026-10-02 --next-day 2026-10-08",
+]
+if text != want:
+    raise SystemExit("print-plan mismatch:\n" + "\n".join(text))
+joined = "\n".join(text)
+if "rules7" in joined or "2026-10-05" in joined:
+    raise SystemExit("print-plan rewrote the session or included rules7")
+PY
+for doc in README.md README_zh.md; do
+  grep -q 'does not run `rules7`' "${doc}" || grep -q '没有 `rules7`' "${doc}"
+  grep -q -- '--print-plan' "${doc}"
+  grep -q 'exchange holidays' "${doc}" || grep -q '交易所休市' "${doc}"
+done
 (
   # shellcheck disable=SC1091
   source scripts/daily_env.sh
