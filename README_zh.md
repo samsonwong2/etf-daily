@@ -24,6 +24,8 @@ scripts/link_decision_packs.sh /path/to/decision_packs
 
 ## 每日顺序
 
+下面这份是手跑的研究日。它包含默认距离的 HRP，也包含 `rules7`。
+
 ```bash
 etf-daily etl
 etf-daily pool
@@ -34,6 +36,10 @@ etf-daily hrp --as-of 2026-11-04
 etf-daily hrp --dist-t 0.8 --as-of 2026-11-04
 etf-daily rules7 --listing-dir "$PLOTLY_ROOT/20261104_from_listing"
 ```
+
+`scripts/accept_eod.sh` 不跑上面整份。它只跑八条：`etl`、`pool`、`cluster-review`、带 `--skip-rebuild --skip-html` 的 `regime`、`listing`、`hrp --dist-t 0.8`、`triggers`、`morning`。其中没有 `rules7`，也没有默认距离的 HRP。`--print-plan` 只打印这八条，不启动 Python。
+
+`--next-day` 是下一交易日。脚本不认识交易所休市，也不会把日期改成下一个工作日。下一开市日晚于下一个工作日时，自己传入那一天。省略 `--next-day` 时，`etf-daily triggers` 只会补下一个工作日，周六周日除外。
 
 `listing` 默认增量，只补新的交易日。图 12 默认打开，`FIG12=0` 可关。
 
@@ -57,6 +63,10 @@ etf-daily rules7 --listing-dir "$PLOTLY_ROOT/20261105_from_listing"
 `listing --intraday` 用当天最新一份同时有 `signals_oos.csv` 和 `live_snapshot.csv` 的盘中包，把这根实时 bar 叠到上市日图上。HTML 在 `$PLOTLY_ROOT/{YYYYMMDD}_from_listing`。没有盘中包时会退出，并提示先跑上面的 `regime`。
 
 `adaptive --intraday` 可选，出图到 `$PLOTLY_ROOT/{YYYYMMDD}all_adaptive`。它复用日期早于今天的最新一份 `all_adaptive` 配置，默认不重训，并另抓一份快照。`listing` 不读这个目录。
+
+## 开发
+
+用 Cursor 改这个仓库时，先看 [docs/pstack.md](docs/pstack.md)。pstack 是编辑流程用的插件，不是行情或下单依赖。装在一个账户上，不等于每台机器都启用。
 
 ## 测试
 
