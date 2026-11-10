@@ -333,14 +333,14 @@ def test_flat_buy_section_lists_holdings_with_a_price(tmp_path):
             "类型": "慢趋势", "买规则": "aux_edge 或 B1", "T收盘": "1.6550",
             "图9下轨": "1.6377", "距图9下轨": "1.1%",
             "快形态(≥20%)": "", "买入信号": "", "图7或图8折价≤-8%": "是",
-            "辅助买像": "是", "图9近下轨(≤下轨×1.01)": "",
+            "辅助买像": "是", "图9贴下轨(≤下轨×1.01)": "",
         },
         {
             "代码": "SH510300", "名称": "沪深300ETF华泰柏瑞", "今日状态": "空仓", "今日动作": "观望",
             "类型": "长期下跌或周期", "买规则": "aux_edge 或 B1", "T收盘": "4.3850",
             "图9下轨": "4.1171", "距图9下轨": "6.5%",
             "快形态(≥20%)": "", "买入信号": "", "图7或图8折价≤-8%": "",
-            "辅助买像": "是", "图9近下轨(≤下轨×1.01)": "",
+            "辅助买像": "是", "图9贴下轨(≤下轨×1.01)": "",
         },
     ]))
     text = "\n".join(_format_flat_buy_section(frame, tmp_path))
@@ -368,7 +368,7 @@ def test_flat_buy_section_ewma_sorts_apart_from_p95(tmp_path):
             "图9下轨": lo, "距图9下轨": dist,
             "图9 EWMA下轨": lo_ewma, "距图9 EWMA下轨": dist_ewma,
             "快形态(≥20%)": "", "买入信号": "", "图7或图8折价≤-8%": "",
-            "辅助买像": "是", "图9近下轨(≤下轨×1.01)": "",
+            "辅助买像": "是", "图9贴下轨(≤下轨×1.01)": "",
             "图9近EWMA下轨(≤下轨×1.01)": "", "近EWMA下轨上跳沿": "",
         }
 
@@ -387,3 +387,141 @@ def test_flat_buy_section_ewma_sorts_apart_from_p95(tmp_path):
     assert "8.0800" in ewma
     assert "无下轨" in ewma
     assert "只作观察" in ewma
+
+
+def test_jiu_march_2020_names_the_trail_and_the_next_buy():
+    """酒 2020-03-17 is the 回落 signal; 03-18 is a new 买点 and that close is the fill."""
+    idx = pd.to_datetime(["2020-03-12", "2020-03-13", "2020-03-16", "2020-03-17", "2020-03-18"])
+    close = pd.Series([100.0, 100.0, 100.0, 88.0, 90.0], index=idx)
+    buy = pd.Series([True, False, False, False, True], index=idx)
+    sell = pd.Series(False, index=idx)
+    res = run_state_machine(close, buy, sell, trail=0.12)
+    trade = res["trades"][0]
+    assert trade["why"] == "回落"
+    assert trade["sell"] == idx[3]
+    assert np.isclose(trade["ret"], 90.0 / 100.0 - 1)
+    assert res["state"]["action"] == "买"
+    assert res["state"]["buy_date"] == idx[4]
+    assert res["state"]["why"] != "回落"
+
+
+def test_hongli_march_2020_does_not_buy_on_the_trail_fill():
+    """红利 03-16 is the 回落 signal. The next session is the fill and not a 买点. 03-18 is."""
+    idx = pd.to_datetime(["2020-03-12", "2020-03-13", "2020-03-16", "2020-03-17", "2020-03-18"])
+    close = pd.Series([100.0, 100.0, 92.0, 93.0, 94.0], index=idx)
+    buy = pd.Series([True, False, False, False, True], index=idx)
+    sell = pd.Series(False, index=idx)
+    mid = run_state_machine(close.iloc[:4], buy.iloc[:4], sell.iloc[:4], trail=0.08)
+    assert mid["trades"][0]["why"] == "回落"
+    assert mid["trades"][0]["sell"] == idx[2]
+    assert np.isclose(mid["trades"][0]["ret"], 93.0 / 100.0 - 1)
+    assert mid["state"]["action"] == "观望"
+    full = run_state_machine(close, buy, sell, trail=0.08)
+    assert full["state"]["action"] == "买"
+    assert full["state"]["buy_date"] == idx[4]
+
+
+def test_exact_eight_percent_counts_and_a_hair_less_does_not():
+    from etf_daily.lib.rules7 import build_masks
+
+    hit = _band_frame(px=10.10, lower=10.0, gap7=-0.08, gap8=0.0)
+    miss = _band_frame(px=10.10, lower=10.0, gap7=-0.079, gap8=0.0)
+    off_rail = _band_frame(px=10.11, lower=10.0, gap7=-0.08, gap8=0.0)
+    assert bool(build_masks(hit)["b1"].iloc[-1])
+    assert not bool(build_masks(miss)["b1"].iloc[-1])
+    assert not bool(build_masks(off_rail)["b1"].iloc[-1])
+
+
+def test_already_inside_the_lower_rail_is_not_aux_edge():
+    from etf_daily.lib.rules7 import build_masks
+
+    frame = _band_frame(px=10.05, lower=10.0, gap7=0.0, gap8=0.0, n=2)
+    frame["fig9_near_lo"] = True
+    frame["aux_buy"] = [False, True]
+    assert not bool(build_masks(frame)["ae_buy"].any())
+
+
+def test_half_percent_under_the_upper_rail_is_touching_not_piercing():
+    from etf_daily.lib.rules7 import build_masks
+
+    frame = _g1_frame(px=19.90, upper=20.0)
+    masks = build_masks(frame)
+    snap = indicator_snapshot(
+        frame, masks,
+        RuleSpec(True, False, "fig9", True, 0.15),
+        {"trail_hit": False, "sell_masked_by_g1": False, "stop": None},
+    )
+    assert snap["near_hi"] and snap["not_touch9hi"]
+    assert bool(masks["g1"].iloc[-1])
+
+
+def test_g1_on_the_buy_signal_does_not_latch():
+    close = _series([10.0, 10.0, 10.0])
+    res = run_state_machine(close, _mask(3, [2]), _mask(3, []), g1=_mask(3, [2]), trail=0.08)
+    assert res["state"]["action"] == "买"
+    assert res["state"]["g1_seen"] is False
+
+
+def test_g1_on_the_fill_day_blocks_the_rail_and_is_not_a_trail():
+    close = _series([10.0, 8.0])
+    res = run_state_machine(close, _mask(2, [0]), _mask(2, [1]), g1=_mask(2, [1]), trail=0.08)
+    assert res["trades"] == []
+    assert res["state"]["action"] == "持有"
+    assert res["state"]["g1_seen"] is True
+    assert res["state"]["why"] != "回落"
+    assert res["state"]["sell_masked_by_g1"] is True
+
+
+def test_same_day_rail_and_trail_is_named_rail_sell():
+    close = _series([10.0, 10.0, 8.0, 8.0])
+    res = run_state_machine(close, _mask(4, [0]), _mask(4, [2]), trail=0.08)
+    assert res["trades"][0]["why"] == "卖点"
+
+
+def test_checklist_uses_the_study_words():
+    from etf_daily.scripts.scan_rules7_checklist import HEAD_COLS, POS_COLS, SNAP_COLS
+
+    names = set(HEAD_COLS) | set(POS_COLS) | {col for col, _ in SNAP_COLS}
+    assert "信号日" in names and "成交日" in names
+    assert "G1后不卖" not in names
+    assert "本笔已进入G1" in names
+    assert any("贴下轨" in col for col in names)
+    assert any("贴上轨" in col for col in names)
+    assert any("未碰上轨" in col for col in names)
+
+
+def _band_frame(*, px: float, lower: float, gap7: float, gap8: float, n: int = 1) -> pd.DataFrame:
+    idx = pd.bdate_range("2024-01-02", periods=n)
+    frame = pd.DataFrame(index=idx)
+    frame["px"] = px
+    frame["fig9_lower"] = lower
+    frame["fig9_upper"] = lower * 1.2
+    frame["fig8_upper"] = lower * 1.3
+    frame["fig7_gap"] = gap7
+    frame["fig8_gap"] = gap8
+    frame["fig9_near_lo"] = frame["px"] <= frame["fig9_lower"] * 1.01
+    frame["fig9_near_hi"] = False
+    frame["aux_buy"] = False
+    frame["aux_sell"] = False
+    frame["fig9_mid_stretch_sell"] = False
+    frame["locmin"] = False
+    frame["locmax"] = False
+    frame["fig9_pos"] = 0.5
+    frame["fig9_touch_hi"] = False
+    for k in (7, 8, 9, 10):
+        frame[f"fig{k}_g"] = 0.0
+    return frame
+
+
+def _g1_frame(*, px: float, upper: float) -> pd.DataFrame:
+    frame = _band_frame(px=px, lower=upper / 1.2, gap7=0.0, gap8=0.0, n=12)
+    frame["fig9_upper"] = upper
+    frame["px"] = px
+    frame["fig9_touch_hi"] = False
+    frame["fig9_pos"] = 0.4
+    frame.iloc[-1, frame.columns.get_loc("fig9_pos")] = 0.9
+    frame["fig7_g"] = 0.1
+    frame["fig8_g"] = 0.1
+    frame["fig9_g"] = 0.05
+    frame["fig10_g"] = 0.2
+    return frame

@@ -88,7 +88,7 @@ def _b(key: str) -> Callable[[dict], str]:
 SNAP_COLS: list[tuple[str, Callable[[dict], str]]] = [
     # buy: aux_edge
     ("图9下轨", _x("lo9")), ("距图9下轨", _p("dist_lo9")),
-    ("图9近下轨(≤下轨×1.01)", _b("near_lo")), ("昨日近下轨", _b("near_lo_prev")),
+    ("图9贴下轨(≤下轨×1.01)", _b("near_lo")), ("昨日贴下轨", _b("near_lo_prev")),
     ("近下轨上跳沿", _b("near_lo_edge")),
     ("图9 EWMA下轨", _x("lo9_ewma")), ("距图9 EWMA下轨", _p("dist_lo9_ewma")),
     ("图9近EWMA下轨(≤下轨×1.01)", _b("near_lo_ewma")),
@@ -97,7 +97,7 @@ SNAP_COLS: list[tuple[str, Callable[[dict], str]]] = [
     ("收盘<MA20", _b("below_ma20")), ("MA5<MA20", _b("ma5_below")),
     ("gap5", _p("gap5", 2)), ("gap5≤0", _b("gap5_le0")),
     ("gap20", _p("gap20", 2)), ("gap20≤0", _b("gap20_le0")),
-    ("图10未触上轨", _b("fig10_not_hi")), ("辅助买像", _b("aux_buy")),
+    ("图10未碰上轨", _b("fig10_not_hi")), ("辅助买像", _b("aux_buy")),
     ("aux_edge买点", _b("ae_buy")),
     # buy: B1 / fast pattern
     ("图7折价", _p("gap7")), ("图8折价", _p("gap8")),
@@ -106,56 +106,56 @@ SNAP_COLS: list[tuple[str, Callable[[dict], str]]] = [
     ("快形态剩余K线", lambda d: str(int(d["fast_clear_bars"])) if d.get("fast") else ""),
     # sell: fig9
     ("图9上轨", _x("hi9")), ("距图9上轨", _p("dist_hi9")),
-    ("图9近上轨(≥上轨×0.99)", _b("near_hi")), ("近上轨上跳沿", _b("near_hi_edge")),
+    ("图9贴上轨(≥上轨×0.99)", _b("near_hi")), ("贴上轨上跳沿", _b("near_hi_edge")),
     ("收盘>MA20", _b("above_ma20")), ("MA5>MA20", _b("ma5_above")),
     ("gap5≥0", _b("gap5_ge0")), ("gap20≥0", _b("gap20_ge0")),
     ("辅助卖像", _b("aux_sell")), ("卖点A", _b("sell_a")),
     ("10日局部高点", _b("locmax")),
     ("图9带内位置", _p("pos9", 0)), ("图9位置≥80%", _b("pos9_ok")),
     ("图9斜率", _p("g9")), ("图9斜率>0", _b("g9_pos")),
-    ("图9图10未触上轨", _b("no_touch_hi")),
+    ("图9图10未碰上轨", _b("no_touch_hi")),
     ("vol5分位", _p("vol5", 0)), ("vol5分位≥70%", _b("vol5_ok")),
     ("图7溢价≥5%", _b("prem7_ok")),
     ("图10带内位置", _p("pos10", 0)), ("图10位置≥90%", _b("pos10_ok")),
     ("带内拉伸B", _b("stretch")), ("图9卖点", _b("fig9_sell")),
     # sell: fig8
     ("图8上轨", _x("hi8")), ("距图8上轨", _p("dist_hi8")),
-    ("图8近上轨(≥上轨×0.99)", _b("near_hi8")), ("图8卖点", _b("fig8_sell")),
+    ("图8贴上轨(≥上轨×0.99)", _b("near_hi8")), ("图8卖点", _b("fig8_sell")),
     # G1
     ("图7斜率", _p("g7")), ("图7斜率>0", _b("g7_pos")),
     ("图8斜率", _p("g8")), ("图8斜率>0", _b("g8_pos")),
     ("图9位置10日变化", _p("pos9_10", 0)), ("10日变化≥30pp", _b("pos9_10_ok")),
-    ("未触图9上轨", _b("not_touch9hi")),
+    ("图9未碰上轨", _b("not_touch9hi")),
     ("图10斜率", _p("g10")), ("图10斜率>图9", _b("g10_gt_g9")),
     ("G1今日", _b("g1")),
 ]
 HEAD_COLS = (
-    "代码", "名称", "T收盘", "类型", "类型来源", "买规则", "卖规则", "G1后不卖", "回落幅度",
+    "代码", "名称", "T收盘", "类型", "类型来源", "买规则", "卖规则", "G1后卖点不再出场", "回落幅度",
     "今日状态", "今日动作", "卖出原因", "触发指标", "买入信号", "买点价", "买点状态",
     "EWMA买点价", "EWMA买点状态", "卖出信号",
     *CLUSTER_COLS,
 )
 POS_COLS = (
-    "买入日", "买入价", "持仓最高收盘", "持仓浮盈", "回落止损价", "距止损",
-    "回落触发", "本笔G1已触发", "卖点被G1屏蔽",
+    "信号日", "成交日", "买入日", "买入价", "持仓最高收盘", "持仓浮盈", "回落止损价", "距止损",
+    "回落触发", "本笔已进入G1", "卖点被G1屏蔽",
 )
 COLS = (*HEAD_COLS, *(c for c, _ in SNAP_COLS), *POS_COLS)
 
 THRESHOLDS = [
-    ("图9近下轨", "收盘 ≤ 图9下轨 × 1.01", "aux_edge买点、B1"),
-    ("近下轨上跳沿", "今天近下轨、昨天不是", "aux_edge买点"),
-    ("辅助买像", "收盘 < MA20、MA5 < MA20、gap5 ≤ 0、gap20 ≤ 0、图10 未触上轨", "aux_edge买点"),
-    ("B1", "图7 或图8 折价 ≤ −8%，且图9近下轨", "买（规则含 B1 时）"),
-    ("快形态", "近 60 日任一 40 日涨幅 ≥ 20%", "规则含“快形态不买”时拦买"),
-    ("图9近上轨", "收盘 ≥ 图9上轨 × 0.99", "卖点A"),
+    ("图9贴下轨", "收盘 ≤ 图9下轨 × 1.01，刚好等于算贴到", "aux_edge买点、B1"),
+    ("近下轨上跳沿", "今天贴下轨、昨天不是", "aux_edge买点"),
+    ("辅助买像", "收盘 < MA20、MA5 < MA20、gap5 ≤ 0、gap20 ≤ 0、图10 未碰上轨", "aux_edge买点"),
+    ("B1", "图7 或图8 折价 ≤ −8%，且图9贴下轨。刚好 −8% 算进", "买（规则含 B1 时）"),
+    ("快形态", "近 60 日任一 40 日涨幅 ≥ 20%", "规则含“快形态不买”时拦住开仓，买点这个词还在"),
+    ("图9贴上轨", "收盘 ≥ 图9上轨 × 0.99，刚好等于算贴到", "卖点A"),
     ("辅助卖像", "收盘 > MA20、MA5 > MA20、gap5 ≥ 0、gap20 ≥ 0", "卖点A、图8卖点、带内拉伸B"),
-    ("卖点A", "图9近上轨上跳沿，且辅助卖像", "图9卖点"),
-    ("带内拉伸B", "辅助卖像、10日局部高点、图9位置 ≥ 80%、图9斜率 > 0、图9图10未触上轨、"
+    ("卖点A", "图9贴上轨上跳沿，且辅助卖像", "图9卖点"),
+    ("带内拉伸B", "辅助卖像、10日局部高点、图9位置 ≥ 80%、图9斜率 > 0、图9图10未碰上轨、"
                  "vol5分位 ≥ 70%、图7溢价 ≥ 5% 或图10位置 ≥ 90%", "图9卖点、图8卖点"),
     ("图8卖点", "收盘 ≥ 图8上轨 × 0.99 且辅助卖像，或带内拉伸B", "卖（规则为图8卖时）"),
-    ("G1", "图7、图8 斜率 > 0，图9位置 10 日升 ≥ 30pp 且 ≥ 80%，未触图9上轨，图10斜率 > 图9斜率",
-     "持仓中触发后本笔不再按图9/图8 卖"),
-    ("回落触发", "收盘 ≤ 持仓最高收盘 × (1 − 回落幅度)", "卖（规则设回落时）"),
+    ("G1", "图7、图8 斜率 > 0，图9位置 10 日升 ≥ 30pp 且 ≥ 80%，图9未碰上轨，图10斜率 > 图9斜率",
+     "买点当天不算。从成交日起卖点不再出场，回落照常"),
+    ("回落触发", "从成交日的下一根起，收盘 ≤ 持仓最高收盘 × (1 − 回落幅度)，刚好等于也算", "卖（规则设回落时）"),
     ("买点价", "收盘 ≤ 图9下轨 × 1.01", "全部标的都填，不是新的成交规则"),
     ("EWMA买点价", "收盘 ≤ 图9 EWMA下轨 × 1.01", "观察表，不改变成交规则"),
 ]
@@ -400,7 +400,7 @@ def scan_one(html: Path, *, listing: Path, as_of: pd.Timestamp, anchor_code: str
         "类型来源": res["source"],
         "买规则": spec.buy_text(),
         "卖规则": spec.sell_text(),
-        "G1后不卖": _yn(spec.g1_hold),
+        "G1后卖点不再出场": _yn(spec.g1_hold),
         "回落幅度": spec.trail_text(),
         "今日状态": "持仓" if st["holding"] else "空仓",
         "今日动作": st["action"],
@@ -421,6 +421,8 @@ def scan_one(html: Path, *, listing: Path, as_of: pd.Timestamp, anchor_code: str
     row["_html"] = html.name
     row.update({col: fmt(snap) for col, fmt in SNAP_COLS})
     row.update({
+        "信号日": _day(st["buy_date"]),
+        "成交日": _day(st["fill_date"]),
         "买入日": _day(st["buy_date"]),
         "买入价": _px(fill_px),
         "持仓最高收盘": _px(st["peak"]),
@@ -428,7 +430,7 @@ def scan_one(html: Path, *, listing: Path, as_of: pd.Timestamp, anchor_code: str
         "回落止损价": _px(st["stop"]),
         "距止损": _pct(snap["dist_stop"]),
         "回落触发": _yn(snap["trail_hit"]),
-        "本笔G1已触发": _yn(st["g1_seen"]),
+        "本笔已进入G1": _yn(st["g1_seen"]),
         "卖点被G1屏蔽": _yn(snap["sell_masked_by_g1"]),
     })
     row.update({
@@ -538,7 +540,7 @@ def _quote_snap(row: pd.Series, *, rail: str) -> dict[str, Any]:
     lo = _f(row.get("图9下轨"))
     shared.update({
         "lo9": float("nan") if lo is None else lo,
-        "near_lo": _yes_cell(row.get("图9近下轨(≤下轨×1.01)")),
+        "near_lo": _yes_cell(row.get("图9贴下轨(≤下轨×1.01)")),
     })
     return shared
 
@@ -670,7 +672,7 @@ def write_markdown(path: Path, df: pd.DataFrame, *, as_of: pd.Timestamp, listing
     lines += _md_table(buys, ["代码", "名称", "推荐买入", "聚类", "是否簇代表", "类型", "买规则",
                               "T收盘", "距图9下轨", "触发指标"])
     lines += [f"## 今日卖出（次日收盘卖）：{len(sells)} 只", ""]
-    lines += _md_table(sells, ["代码", "名称", "类型", "卖出原因", "买入日", "买入价", "T收盘", "持仓浮盈", "触发指标"])
+    lines += _md_table(sells, ["代码", "名称", "类型", "卖出原因", "信号日", "成交日", "买入价", "T收盘", "持仓浮盈", "触发指标"])
 
     lines += _format_hrp_cluster_section(df, cluster_path=cluster_path)
 
@@ -688,7 +690,7 @@ def write_markdown(path: Path, df: pd.DataFrame, *, as_of: pd.Timestamp, listing
     lines += _md_table(near_stop, ["代码", "名称", "聚类", "类型", "T收盘", "回落止损价", "距止损", "持仓浮盈"])
 
     counts = df["_type"].value_counts() if "_type" in df.columns else pd.Series(dtype=int)
-    lines += ["## 类型与规则", "", "| 类型 | 买 | 卖 | G1 后不卖 | 回落卖出 | 只数 |", "| --- | --- | --- | --- | --- | ---: |"]
+    lines += ["## 类型与规则", "", "| 类型 | 买 | 卖 | G1后卖点不再出场 | 回落卖出 | 只数 |", "| --- | --- | --- | --- | --- | ---: |"]
     for t in TYPE_ORDER:
         s = rules7.TYPE_PARAMS[t]
         lines.append(f"| {t} | {s.buy_text()} | {s.sell_text()} | {'是' if s.g1_hold else '否'} | "
@@ -700,7 +702,7 @@ def write_markdown(path: Path, df: pd.DataFrame, *, as_of: pd.Timestamp, listing
         "",
         "## 注意",
         "",
-        "- 今日动作看的是该标的所用规则：买入信号只在空仓时生效，卖出信号只在持仓且本笔未触发 G1 时生效（G1 后不卖的规则）。",
+        "- 今日动作看的是该标的所用规则：买入信号只在空仓时生效。进入 G1 后卖点不再出场，回落照常。买点当天的 G1 不算进这笔。",
         "- 买点价 = 图9下轨 × 1.01，持仓和空仓都填。不是盘中委托。成交仍是信号日之后的下一根收盘，且只在当时空仓时成交。",
         "- EWMA买点价 = 图9 EWMA下轨 × 1.01。图9 EWMA下轨就是图9上那条 EWMA 95 分位下轨（λ=0.94）。持仓和空仓都填，只作观察，不改今日动作、买入信号和成交。",
         "- 已在带内的下一根收盘若仍在带内，不是新的 aux_edge。",
