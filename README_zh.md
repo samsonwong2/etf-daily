@@ -33,9 +33,13 @@ etf-daily listing --as-of 2026-11-04
 etf-daily hrp --as-of 2026-11-04
 etf-daily hrp --dist-t 0.8 --as-of 2026-11-04
 etf-daily rules7 --listing-dir "$PLOTLY_ROOT/20261104_from_listing"
+etf-daily forward --listing-dir "$PLOTLY_ROOT/20261104_from_listing"
+etf-daily forward-page --listing-dir "$PLOTLY_ROOT/20261104_from_listing"
 ```
 
 `listing` 默认增量，只补新的交易日。图 12 默认打开，`FIG12=0` 可关。
+
+`forward` 用冻结的 rules7 重放当日目录，把每笔的 T+1 成交价写到 `$PLOTLY_ROOT/rules7_forward/`。`forward-page` 另写 `$PLOTLY_ROOT/{YYYYMMDD}_forward/`，默认 7 只，不改 `*_from_listing` 里的原图。失败标准见 [docs/rules7.md](docs/rules7.md)。
 
 各命令的参数，以及可选的 `adaptive`、`triggers`、`b1235`、`morning` 见 [README.md](README.md)。图 7–图 11 的读法见 [docs/fair-path.md](docs/fair-path.md)。rules7 的规则见 [docs/rules7.md](docs/rules7.md)。
 

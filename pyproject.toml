@@ -45,7 +45,7 @@ etf-daily = "etf_daily.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-etf_daily = ["config/*.yaml", "pool/*.json"]
+etf_daily = ["config/*.yaml", "pool/*.json", "lib/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -13,7 +13,7 @@ from pathlib import Path
 PROJECT_ROOT = next((p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file()), Path.cwd())
 COMMANDS = (
     "etl, pool, cluster-review, regime, adaptive, listing, hrp, triggers, b1235, "
-    "b1235-backtest, rules7, morning"
+    "b1235-backtest, rules7, forward, forward-page, morning"
 )
 
 
@@ -259,6 +259,87 @@ def _rules7(rest: list[str]) -> int:
     return int(result) if isinstance(result, int) else 0
 
 
+def _forward(rest: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="etf-daily forward")
+    parser.add_argument("--listing-dir", required=True)
+    parser.add_argument("--as-of", default=None)
+    parser.add_argument("--out-dir", default=None)
+    args, unknown = parser.parse_known_args(rest)
+    if unknown:
+        print(f"unknown arguments: {' '.join(unknown)}", file=sys.stderr)
+        return 2
+    listing = _resolve_listing(args.listing_dir)
+    as_of = args.as_of or _as_of_from_listing(listing)
+    if not as_of:
+        print("pass --as-of YYYY-MM-DD", file=sys.stderr)
+        return 2
+    from etf_daily.lib.rules7_forward import run
+
+    try:
+        result = run(listing, as_of, out_dir=Path(args.out_dir) if args.out_dir else None)
+    except FileNotFoundError as exc:
+        print(exc, file=sys.stderr)
+        return 2
+    if result.get("code"):
+        print(result.get("error", "forward failed"), file=sys.stderr)
+        return int(result["code"])
+    verdict = result["verdict"]
+    print(
+        f"[OK] {result['report']}  names={result['n_names']} rows={result['n_rows']} "
+        f"裁决={verdict['overall']}"
+    )
+    for line in result.get("errors") or []:
+        print(f"[skip] {line}", file=sys.stderr)
+    return 0
+
+
+def _forward_page(rest: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="etf-daily forward-page")
+    parser.add_argument("--listing-dir", required=True)
+    parser.add_argument("--as-of", default=None)
+    parser.add_argument("--codes", default=None, help="comma-separated codes; default is the 7")
+    parser.add_argument("--all", action="store_true")
+    parser.add_argument("--out-dir", default=None)
+    args, unknown = parser.parse_known_args(rest)
+    if unknown:
+        print(f"unknown arguments: {' '.join(unknown)}", file=sys.stderr)
+        return 2
+    if args.all and args.codes:
+        print("pass --all or --codes, not both", file=sys.stderr)
+        return 2
+    listing = _resolve_listing(args.listing_dir)
+    as_of = args.as_of or _as_of_from_listing(listing)
+    if not as_of:
+        print("pass --as-of YYYY-MM-DD", file=sys.stderr)
+        return 2
+    from etf_daily.plots.plot_rules7_forward import write_pages
+
+    codes = None if args.codes is None else [item.strip() for item in args.codes.split(",") if item.strip()]
+    try:
+        result = write_pages(
+            listing,
+            as_of,
+            codes=codes,
+            all_names=bool(args.all),
+            dest_dir=Path(args.out_dir) if args.out_dir else None,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        print(exc, file=sys.stderr)
+        return 2
+    for path in result["written"]:
+        print(f"[OK] {path}")
+    if result["missing"]:
+        print(
+            "no listing html for "
+            + ", ".join(result["missing"])
+            + ". Run etf-daily listing first. This command does not draw those pages.",
+            file=sys.stderr,
+        )
+    for line in result.get("errors") or []:
+        print(f"[skip] {line}", file=sys.stderr)
+    return 0 if not result["missing"] and not result.get("errors") else 2
+
+
 def _b1235_backtest(rest: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="etf-daily b1235-backtest", add_help=False)
     parser.add_argument("--listing-dir", default=None)
@@ -300,6 +381,10 @@ def main(argv: list[str] | None = None) -> int:
         return _b1235_backtest(rest)
     if command == "rules7":
         return _rules7(rest)
+    if command == "forward":
+        return _forward(rest)
+    if command == "forward-page":
+        return _forward_page(rest)
     if command == "morning":
         from etf_daily.morning import main as morning_main
 

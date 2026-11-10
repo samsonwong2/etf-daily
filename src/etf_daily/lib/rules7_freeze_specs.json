@@ -1,0 +1,456 @@
+{
+  "as_of": "2026-11-09",
+  "logic": "0263d0d",
+  "freeze_tag": "rules7-freeze",
+  "spec_fp": "e0d372b555b733248b7e55bfcf751bf3c86f711d9b7f9fe8d91c9ef0dea97bfa",
+  "codes": {
+    "SH510300": {
+      "name": "沪深300ETF华泰柏瑞",
+      "type": "长期下跌或周期",
+      "source": "自动",
+      "universe": "holdout",
+      "bars": 3511,
+      "applicable": true
+    },
+    "SH512200": {
+      "name": "房地产ETF南方",
+      "type": "长期下跌或周期",
+      "source": "自动",
+      "universe": "holdout",
+      "bars": 2211,
+      "applicable": true
+    },
+    "SH512530": {
+      "name": "沪深300红利ETF建信",
+      "type": "平稳震荡",
+      "source": "专属",
+      "universe": "study",
+      "bars": 1726,
+      "applicable": true,
+      "in_sample_total": 1.7076924854546833,
+      "in_sample_mdd": -0.11547526193280377,
+      "in_sample_closed": 8,
+      "in_sample_open": true
+    },
+    "SH512660": {
+      "name": "军工ETF国泰",
+      "type": "长期下跌或周期",
+      "source": "自动",
+      "universe": "holdout",
+      "bars": 2488,
+      "applicable": true
+    },
+    "SH512690": {
+      "name": "酒ETF鹏华",
+      "type": "长期下跌或周期",
+      "source": "专属",
+      "universe": "study",
+      "bars": 1824,
+      "applicable": true,
+      "in_sample_total": NaN,
+      "in_sample_mdd": NaN,
+      "in_sample_closed": 6,
+      "in_sample_open": false
+    },
+    "SH512700": {
+      "name": "银行ETF南方",
+      "type": "慢趋势",
+      "source": "自动",
+      "universe": "holdout",
+      "bars": 2254,
+      "applicable": true
+    },
+    "SH512880": {
+      "name": "证券ETF国泰",
+      "type": "长期下跌或周期",
+      "source": "自动",
+      "universe": "holdout",
+      "bars": 2488,
+      "applicable": true
+    },
+    "SH513050": {
+      "name": "中概互联网ETF易方达",
+      "type": "长期下跌或周期",
+      "source": "自动",
+      "universe": "holdout",
+      "bars": 2379,
+      "applicable": true
+    },
+    "SH513080": {
+      "name": "法国ETF华安",
+      "type": "慢趋势",
+      "source": "自动",
+      "universe": "holdout",
+      "bars": 1553,
+      "applicable": true
+    },
+    "SH513090": {
+      "name": "香港证券ETF易方达",
+      "type": "长期下跌或周期",
+      "source": "自动",
+      "universe": "holdout",
+      "bars": 1605,
+      "applicable": true
+    },
+    "SH513100": {
+      "name": "纳指ETF国泰",
+      "type": "慢趋势",
+      "source": "专属",
+      "universe": "study",
+      "bars": 3226,
+      "applicable": true,
+      "in_sample_total": NaN,
+      "in_sample_mdd": NaN,
+      "in_sample_closed": 27,
+      "in_sample_open": false
+    },
+    "SH513190": {
+      "name": "港股通金融ETF华夏",
+      "type": "慢趋势",
+      "source": "自动",
+      "universe": "holdout",
+      "bars": 747,
+      "applicable": true
+    },
+    "SH513290": {
+      "name": "纳指生物科技ETF汇添富",
+      "type": "慢趋势",
+      "source": "自动",
+      "universe": "holdout",
+      "bars": 1015,
+      "applicable": true
+    },
+    "SH513310": {
+      "name": "中韩半导体ETF华泰柏瑞",
+      "type": "高波动主题",
+      "source": "自动",
+      "universe": "holdout",
+      "bars": 938,
+      "applicable": true
+    },
+    "SH513350": {
+      "name": "标普油气ETF富国",
+      "type": "慢趋势",
+      "source": "自动",
+      "universe": "holdout",
+      "bars": 713,
+      "applicable": true
+    },
+    "SH513360": {
+      "name": "教育ETF博时",
+      "type": "长期下跌或周期",
+      "source": "自动",
+      "universe": "holdout",
+      "bars": 1308,
+      "applicable": true
+    },
+    "SH513400": {
+      "name": "道琼斯ETF鹏华",
+      "type": "慢趋势",
+      "source": "自动",
+      "universe": "holdout",
+      "bars": 666,
+      "applicable": true
+    },
+    "SH513520": {
+      "name": "日经ETF华夏",
+      "type": "慢趋势",
+      "source": "自动",
+      "universe": "holdout",
+      "bars": 1789,
+      "applicable": true
+    },
+    "SH513650": {
+      "name": "标普500ETF南方",
+      "type": "平稳震荡",
+      "source": "自动",
+      "universe": "holdout",
+      "bars": 871,
+      "applicable": true
+    },
+    "SH513730": {
+      "name": "东南亚科技ETF华泰柏瑞",
+      "type": "长期下跌或周期",
+      "source": "自动",
+      "universe": "holdout",
+      "bars": 710,
+      "applicable": true
+    },
+    "SH513850": {
+      "name": "美国50ETF易方达",
+      "type": "慢趋势",
+      "source": "自动",
+      "universe": "holdout",
+      "bars": 720,
+      "applicable": true
+    },
+    "SH513970": {
+      "name": "恒生消费ETF景顺",
+      "type": "长期下跌或周期",
+      "source": "自动",
+      "universe": "holdout",
+      "bars": 859,
+      "applicable": true
+    },
+    "SH515210": {
+      "name": "钢铁ETF国泰",
+      "type": "长期下跌或周期",
+      "source": "自动",
+      "universe": "holdout",
+      "bars": 1623,
+      "applicable": true
+    },
+    "SH515220": {
+      "name": "煤炭ETF国泰",
+      "type": "高波动主题",
+      "source": "自动",
+      "universe": "holdout",
+      "bars": 1623,
+      "applicable": true
+    },
+    "SH515880": {
+      "name": "通信ETF国泰",
+      "type": "高波动主题",
+      "source": "专属",
+      "universe": "study",
+      "bars": 1736,
+      "applicable": true,
+      "in_sample_total": 5.038118792373097,
+      "in_sample_mdd": -0.335251413527174,
+      "in_sample_closed": 5,
+      "in_sample_open": false
+    },
+    "SH516570": {
+      "name": "石化ETF易方达",
+      "type": "长期下跌或周期",
+      "source": "自动",
+      "universe": "holdout",
+      "bars": 1307,
+      "applicable": true
+    },
+    "SH516910": {
+      "name": "物流ETF富国",
+      "type": "长期下跌或周期",
+      "source": "自动",
+      "universe": "holdout",
+      "bars": 1311,
+      "applicable": true
+    },
+    "SH517120": {
+      "name": "创新药ETF华泰柏瑞",
+      "type": "长期下跌或周期",
+      "source": "自动",
+      "universe": "holdout",
+      "bars": 1286,
+      "applicable": true
+    },
+    "SH517400": {
+      "name": "黄金股ETF国泰",
+      "type": "高波动主题",
+      "source": "自动",
+      "universe": "holdout",
+      "bars": 609,
+      "applicable": true
+    },
+    "SH518880": {
+      "name": "黄金ETF华安",
+      "type": "慢趋势",
+      "source": "专属",
+      "universe": "study",
+      "bars": 3228,
+      "applicable": true,
+      "in_sample_total": 3.52700870273892,
+      "in_sample_mdd": -0.16937346657050045,
+      "in_sample_closed": 4,
+      "in_sample_open": false
+    },
+    "SH520830": {
+      "name": "沙特ETF华泰柏瑞",
+      "type": "长期下跌或周期",
+      "source": "自动",
+      "universe": "holdout",
+      "bars": 561,
+      "applicable": true
+    },
+    "SH520990": {
+      "name": "港股央企红利ETF景顺",
+      "type": "长期下跌或周期",
+      "source": "自动",
+      "universe": "holdout",
+      "bars": 565,
+      "applicable": true
+    },
+    "SH560880": {
+      "name": "家电ETF广发",
+      "type": "慢趋势",
+      "source": "自动",
+      "universe": "holdout",
+      "bars": 1110,
+      "applicable": true
+    },
+    "SH561570": {
+      "name": "油气ETF华泰柏瑞",
+      "type": "慢趋势",
+      "source": "自动",
+      "universe": "holdout",
+      "bars": 501,
+      "applicable": true
+    },
+    "SH562880": {
+      "name": "电池ETF嘉实",
+      "type": "长期下跌或周期",
+      "source": "自动",
+      "universe": "holdout",
+      "bars": 1285,
+      "applicable": true
+    },
+    "SH562900": {
+      "name": "农业ETF易方达",
+      "type": "长期下跌或周期",
+      "source": "自动",
+      "universe": "holdout",
+      "bars": 1188,
+      "applicable": true
+    },
+    "SZ159502": {
+      "name": "标普生物科技ETF嘉实",
+      "type": "慢趋势",
+      "source": "自动",
+      "universe": "holdout",
+      "bars": 683,
+      "applicable": true
+    },
+    "SZ159509": {
+      "name": "纳指科技ETF景顺",
+      "type": "高波动主题",
+      "source": "自动",
+      "universe": "holdout",
+      "bars": 787,
+      "applicable": true
+    },
+    "SZ159512": {
+      "name": "汽车ETF广发",
+      "type": "长期下跌或周期",
+      "source": "自动",
+      "universe": "holdout",
+      "bars": 797,
+      "applicable": true
+    },
+    "SZ159515": {
+      "name": "国企红利ETF鹏扬",
+      "type": "平稳震荡",
+      "source": "自动",
+      "universe": "holdout",
+      "bars": 766,
+      "applicable": true
+    },
+    "SZ159529": {
+      "name": "标普消费ETF景顺",
+      "type": "高波动主题",
+      "source": "自动",
+      "universe": "holdout",
+      "bars": 666,
+      "applicable": true
+    },
+    "SZ159561": {
+      "name": "德国ETF嘉实",
+      "type": "慢趋势",
+      "source": "自动",
+      "universe": "holdout",
+      "bars": 612,
+      "applicable": true
+    },
+    "SZ159611": {
+      "name": "电力ETF广发",
+      "type": "长期下跌或周期",
+      "source": "自动",
+      "universe": "holdout",
+      "bars": 1170,
+      "applicable": true
+    },
+    "SZ159647": {
+      "name": "中药ETF鹏华",
+      "type": "长期下跌或周期",
+      "source": "自动",
+      "universe": "holdout",
+      "bars": 1037,
+      "applicable": true
+    },
+    "SZ159671": {
+      "name": "稀有金属ETF工银",
+      "type": "长期下跌或周期",
+      "source": "自动",
+      "universe": "holdout",
+      "bars": 888,
+      "applicable": true
+    },
+    "SZ159698": {
+      "name": "粮食ETF鹏华",
+      "type": "长期下跌或周期",
+      "source": "自动",
+      "universe": "holdout",
+      "bars": 779,
+      "applicable": true
+    },
+    "SZ159745": {
+      "name": "建材ETF国泰",
+      "type": "长期下跌或周期",
+      "source": "自动",
+      "universe": "holdout",
+      "bars": 1307,
+      "applicable": true
+    },
+    "SZ159805": {
+      "name": "传媒ETF鹏华",
+      "type": "长期下跌或周期",
+      "source": "自动",
+      "universe": "holdout",
+      "bars": 1590,
+      "applicable": true
+    },
+    "SZ159827": {
+      "name": "农业ETF银华",
+      "type": "长期下跌或周期",
+      "source": "自动",
+      "universe": "holdout",
+      "bars": 1426,
+      "applicable": true
+    },
+    "SZ159892": {
+      "name": "恒生医药ETF华夏",
+      "type": "长期下跌或周期",
+      "source": "专属",
+      "universe": "study",
+      "bars": 1227,
+      "applicable": false
+    },
+    "SZ159980": {
+      "name": "有色ETF大成",
+      "type": "慢趋势",
+      "source": "自动",
+      "universe": "holdout",
+      "bars": 1665,
+      "applicable": true
+    },
+    "SZ159981": {
+      "name": "能源化工ETF建信",
+      "type": "长期下跌或周期",
+      "source": "专属",
+      "universe": "study",
+      "bars": 1648,
+      "applicable": true,
+      "in_sample_total": 0.4552408046793244,
+      "in_sample_mdd": -0.15356470334440864,
+      "in_sample_closed": 7,
+      "in_sample_open": false
+    },
+    "SZ159985": {
+      "name": "豆粕ETF华夏",
+      "type": "慢趋势",
+      "source": "自动",
+      "universe": "holdout",
+      "bars": 1678,
+      "applicable": true
+    }
+  }
+}

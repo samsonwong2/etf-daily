@@ -41,6 +41,8 @@ etf-daily listing --as-of 2026-10-26
 etf-daily hrp --as-of 2026-10-26
 etf-daily hrp --dist-t 0.8 --as-of 2026-10-26
 etf-daily rules7 --listing-dir "$PLOTLY_ROOT/20261026_from_listing"
+etf-daily forward --listing-dir "$PLOTLY_ROOT/20261026_from_listing"
+etf-daily forward-page --listing-dir "$PLOTLY_ROOT/20261026_from_listing"
 ```
 
 `listing` is incremental unless the shell is run with `INCREMENTAL=0`. Figure 12 runs unless `FIG12=0`.
@@ -93,6 +95,10 @@ Applies the buy/sell rules in [docs/rules7.md](docs/rules7.md) to every equity H
 
 The output describes day T only. Rows are annotated from the HRP coarse clusters for that day: one recommended buy per cluster. Research only. It does not change production `hold_up`.
 
+### `etf-daily forward` and `etf-daily forward-page`
+
+`forward` replays the frozen rules7 spec on the listing HTML and writes `$PLOTLY_ROOT/rules7_forward/` (a trade ledger with the next-session fill, a one-day strip, and a pass/fail report). `forward-page` writes a separate HTML per name to `$PLOTLY_ROOT/{YYYYMMDD}_forward/`. The default set is the 7 documented ETFs. `--all` or `--codes SH512530,SH518880` selects others. Neither command rewrites `*_from_listing`. Failure tests and the freeze date are in [docs/rules7.md](docs/rules7.md).
+
 ## Optional commands
 
 ### `etf-daily adaptive --as-of YYYY-MM-DD`
@@ -131,7 +137,7 @@ src/etf_daily/cli.py          command dispatch
 src/etf_daily/etl/            Sina fund refresh
 src/etf_daily/pool/builder/   candidate pool
 src/etf_daily/regime/         signal shard
-src/etf_daily/plots/          listing and regime HTML
+src/etf_daily/plots/          listing HTML, plus the separate rules7 forward page
 src/etf_daily/hrp/            dendrogram
 src/etf_daily/data/           Qlib load and forward adjustment
 scripts/                      shells used by regime, adaptive, and listing
