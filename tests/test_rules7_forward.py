@@ -14,6 +14,7 @@ if str(_ROOT / "src") not in sys.path:
 from etf_daily.lib import rules7  # noqa: E402
 from etf_daily.lib.rules7_forward import (  # noqa: E402
     CRITERIA,
+    _clean_json,
     assess,
     gate_open,
     k1_status,
@@ -181,3 +182,25 @@ def test_assess_uses_only_forward_closed_trades():
     assert verdict["k2"]["status"] == "未定"
     assert verdict["k3"]["status"] == "不通过"
     assert verdict["overall"] == "不通过"
+
+
+def test_replay_carries_a_missing_close_forward():
+    frame = _frame("2026-09-01")
+    frame.loc[frame.index[4], "px"] = np.nan
+    replay = replay_frame("SH512530", "红利", frame, typ="平稳震荡", spec=_spec())
+    assert replay["result"]["equity"].notna().all()
+
+
+def test_k3_is_undecided_before_any_forward_bar():
+    idx = pd.bdate_range("2026-10-20", periods=5)
+    curve = pd.Series(np.linspace(1.0, 1.1, 5), index=idx)
+    specs = {"codes": {"SH512530": {"universe": "study", "in_sample_mdd": -0.115}}}
+    verdict = assess({"SH512530": {"equity": curve, "bh": curve}}, [], specs, "2026-10-24")
+    assert verdict["k3"]["codes"]["SH512530"]["status"] == "未定"
+
+
+def test_verdict_json_has_no_bare_nan():
+    import json
+
+    text = json.dumps(_clean_json({"a": float("nan"), "b": [np.float64("inf"), 1.0]}), allow_nan=False)
+    assert json.loads(text) == {"a": None, "b": [None, 1.0]}

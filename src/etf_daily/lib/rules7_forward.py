@@ -248,6 +248,14 @@ def _blank_row(code: str, name: str, typ: str, signal_date: object, reason: str)
     }
 
 
+def filled_close(frame: pd.DataFrame) -> pd.Series:
+    """Close series with holiday gaps carried forward, as ``rules7.evaluate`` does.
+
+    Without this the state machine turns equity into NaN after one missing bar.
+    """
+    return frame["px"].astype(float).ffill()
+
+
 def replay_frame(
     code: str,
     name: str,
@@ -268,7 +276,7 @@ def replay_frame(
         if specs is None:
             specs = load_specs()
         typ, _universe, spec = frozen_type_spec(code, specs)
-    close = frame["px"].astype(float)
+    close = filled_close(frame)
     masks = rules7.build_masks(frame)
     buy, sell = rules7.buy_sell_masks(masks, spec)
     result = rules7.run_state_machine(
@@ -418,7 +426,7 @@ def _window_mdd(series: pd.Series, start: str) -> float:
     window = values.loc[values.index >= pd.Timestamp(start)]
     window = window[np.isfinite(window.to_numpy(dtype=float))]
     if len(window) < 2:
-        return 0.0
+        return float("nan")  # no window yet: undecided, not "zero drawdown"
     return rules7.max_drawdown(window)
 
 
@@ -554,7 +562,7 @@ def render_report(verdict: dict[str, Any]) -> str:
         "",
         f"冻结日 {verdict['freeze_date']}。前向从 {verdict['forward_start']} 起。裁决：{verdict['overall']}。",
         "",
-        f"- K1 回撤：{k1['status']}（达到 5% 的 {k1['eligible']} 只里，更浅的 {k1['shallower']} 只，占比 {share}）",
+        f"- K1 回撤：{k1['status']}（买入持有回撤达 5% 的有 {k1['eligible']} 只，其中 rules7 回撤更浅的 {k1['shallower']} 只，占比 {share}；至少要 {int(CRITERIA['k1_min_eligible'])} 只才判）",
         f"- K2 笔数：{k2['status']}（前向已平仓 {k2['n']} 笔，赢 {k2['wins']} 笔，中位数 {median_txt}）",
         f"- K3 熔断：{k3['status']}",
         "",
@@ -612,8 +620,8 @@ def _replay_listing(
             continue
         rows.extend(packed["rows"])
         equity = packed["result"]["equity"]
-        close = packed["frame"]["px"].astype(float)
-        bh_level = close / float(close.iloc[0])
+        close = filled_close(packed["frame"])
+        bh_level = close / float(close.dropna().iloc[0])
         curves[code] = {"equity": equity, "bh": bh_level}
         state = packed["result"]["state"]
         daily.append(
@@ -648,7 +656,7 @@ def run(listing: Path, as_of: object, *, out_dir: Path | None = None) -> dict[st
     daily_path = update_daily(dest / "rules7_forward_daily.csv", daily, as_of)
     holdout_path = write_holdout(dest / "rules7_holdout_baseline.json")
     verdict_path = dest / "rules7_forward_verdict.json"
-    verdict_path.write_text(json.dumps(verdict, ensure_ascii=False, indent=2, default=_json_default) + "\n", encoding="utf-8")
+    verdict_path.write_text(json.dumps(_clean_json(verdict), ensure_ascii=False, indent=2, default=_json_default, allow_nan=False) + "\n", encoding="utf-8")
     day = pd.Timestamp(as_of).strftime("%Y%m%d")
     report_path = dest / f"forward_report_{day}.md"
     report = render_report(verdict)
@@ -668,6 +676,17 @@ def run(listing: Path, as_of: object, *, out_dir: Path | None = None) -> dict[st
         "report": report_path,
         "out_dir": dest,
     }
+
+
+def _clean_json(value: Any) -> Any:
+    """Turn NaN and inf into None so the file is valid JSON."""
+    if isinstance(value, dict):
+        return {key: _clean_json(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_clean_json(item) for item in value]
+    if isinstance(value, (float, np.floating)) and not np.isfinite(float(value)):
+        return None
+    return value
 
 
 def _json_default(value: object) -> object:
@@ -717,7 +736,7 @@ def write_freeze_specs(
             masks = rules7.build_masks(frame)
             buy, sell = rules7.buy_sell_masks(masks, spec)
             result = rules7.run_state_machine(
-                frame["px"].astype(float),
+                filled_close(frame),
                 buy,
                 sell,
                 g1=masks["g1"] if spec.g1_hold else None,

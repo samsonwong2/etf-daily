@@ -47,8 +47,8 @@
       "universe": "study",
       "bars": 1824,
       "applicable": true,
-      "in_sample_total": NaN,
-      "in_sample_mdd": NaN,
+      "in_sample_total": 2.8405234336389182,
+      "in_sample_mdd": -0.1814258577594693,
       "in_sample_closed": 6,
       "in_sample_open": false
     },
@@ -99,8 +99,8 @@
       "universe": "study",
       "bars": 3226,
       "applicable": true,
-      "in_sample_total": NaN,
-      "in_sample_mdd": NaN,
+      "in_sample_total": 6.730335333239347,
+      "in_sample_mdd": -0.2160289188845903,
       "in_sample_closed": 27,
       "in_sample_open": false
     },
