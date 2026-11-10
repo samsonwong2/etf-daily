@@ -485,6 +485,16 @@ def test_checklist_uses_the_study_words():
     assert "信号日" in names and "成交日" in names
     assert "G1后不卖" not in names
     assert "本笔已进入G1" in names
+    from etf_daily.scripts.scan_rules7_checklist import reported_signal_fill
+
+    today = pd.Timestamp("2020-03-17")
+    signal, fill = reported_signal_fill("卖", today, pd.Timestamp("2020-02-01"), pd.Timestamp("2020-02-02"))
+    assert signal == today and fill is None
+    held_signal, held_fill = reported_signal_fill(
+        "持有", today, pd.Timestamp("2020-02-01"), pd.Timestamp("2020-02-02"),
+    )
+    assert held_signal == pd.Timestamp("2020-02-01")
+    assert held_fill == pd.Timestamp("2020-02-02")
     assert any("贴下轨" in col for col in names)
     assert any("贴上轨" in col for col in names)
     assert any("未碰上轨" in col for col in names)

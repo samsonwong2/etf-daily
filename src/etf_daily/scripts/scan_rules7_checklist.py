@@ -68,6 +68,13 @@ def _yn(b: Any) -> str:
     return "是" if bool(b) else ""
 
 
+def reported_signal_fill(action: str, today, buy_date, fill_date):
+    """A 买 or 卖 today is that signal. A hold keeps the open trade's signal and fill."""
+    if action in ("买", "卖"):
+        return today, None
+    return buy_date, fill_date
+
+
 def _day(ts: Any) -> str:
     return "" if ts is None else pd.Timestamp(ts).strftime("%Y-%m-%d")
 
@@ -155,7 +162,7 @@ THRESHOLDS = [
     ("图8卖点", "收盘 ≥ 图8上轨 × 0.99 且辅助卖像，或带内拉伸B", "卖（规则为图8卖时）"),
     ("G1", "图7、图8 斜率 > 0，图9位置 10 日升 ≥ 30pp 且 ≥ 80%，图9未碰上轨，图10斜率 > 图9斜率",
      "买点当天不算。从成交日起卖点不再出场，回落照常"),
-    ("回落触发", "从成交日的下一根起，收盘 ≤ 持仓最高收盘 × (1 − 回落幅度)，刚好等于也算", "卖（规则设回落时）"),
+    ("回落触发", "出场叫回落。同一天卖点也成立、且还没进入 G1 时，出场叫卖点", "卖（规则设回落时）"),
     ("买点价", "收盘 ≤ 图9下轨 × 1.01", "全部标的都填，不是新的成交规则"),
     ("EWMA买点价", "收盘 ≤ 图9 EWMA下轨 × 1.01", "观察表，不改变成交规则"),
 ]
@@ -420,9 +427,12 @@ def scan_one(html: Path, *, listing: Path, as_of: pd.Timestamp, anchor_code: str
     row["EWMA买点状态"] = ewma_status
     row["_html"] = html.name
     row.update({col: fmt(snap) for col, fmt in SNAP_COLS})
+    signal_day, fill_day = reported_signal_fill(
+        st["action"], frame.index[-1], st["buy_date"], st["fill_date"],
+    )
     row.update({
-        "信号日": _day(st["buy_date"]),
-        "成交日": _day(st["fill_date"]),
+        "信号日": _day(signal_day),
+        "成交日": _day(fill_day),
         "买入日": _day(st["buy_date"]),
         "买入价": _px(fill_px),
         "持仓最高收盘": _px(st["peak"]),
