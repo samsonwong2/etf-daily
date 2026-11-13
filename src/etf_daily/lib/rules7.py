@@ -305,6 +305,34 @@ def _fig9_ewma_lower(frame: pd.DataFrame) -> pd.Series:
     return lower.reindex(frame.index)
 
 
+def _fig9_signed_percentiles(frame: pd.DataFrame) -> tuple[float, float]:
+    """Last-bar fig9 causal and EWMA signed residual percentiles.
+
+    Same series the HTML hover labels 相对路径因果分位 / 相对路径ewma分位.
+    Missing when the frame has no fig9 path, or the rail is still warming up.
+    Observation only: not a rules7 input.
+    """
+    nan = float("nan")
+    if "fig9_path" not in frame.columns or "px" not in frame.columns:
+        return nan, nan
+    from etf_daily.lib.fair_path_research import DEFAULT_MIN_BARS
+    from etf_daily.plots.plot_regime_transition_example import (
+        causal_path_residual_signed_percentile,
+        ewma_path_residual_signed_percentile,
+    )
+
+    min_bars = int(DEFAULT_MIN_BARS)
+    causal = causal_path_residual_signed_percentile(
+        frame["fig9_path"], frame["px"], min_bars=min_bars,
+    )
+    ewma = ewma_path_residual_signed_percentile(
+        frame["fig9_path"], frame["px"], min_bars=min_bars,
+    )
+    causal_last = float(causal.iloc[-1]) if len(causal) else nan
+    ewma_last = float(ewma.iloc[-1]) if len(ewma) else nan
+    return causal_last, ewma_last
+
+
 def _flag(row: pd.Series, col: str) -> bool:
     v = row.get(col)
     return bool(v) if pd.notna(v) else False
@@ -340,6 +368,7 @@ def indicator_snapshot(frame: pd.DataFrame, masks: dict[str, pd.Series], spec: R
     d["near_lo_ewma"] = bool(np.isfinite(lo9e) and px <= lo9e * (1 + near))
     near_lo_ewma_prev = bool(np.isfinite(lo9e_prev) and px_prev <= lo9e_prev * (1 + near))
     d["near_lo_ewma_edge"] = d["near_lo_ewma"] and not near_lo_ewma_prev
+    d["pct9_causal"], d["pct9_ewma"] = _fig9_signed_percentiles(frame)
     d["ma5"], d["ma20"] = ma5, ma20
     d["below_ma20"], d["ma5_below"] = bool(px < ma20), bool(ma5 < ma20)
     d["gap5"], d["gap20"] = gap5, gap20

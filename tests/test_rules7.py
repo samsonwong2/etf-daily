@@ -134,6 +134,7 @@ def test_indicator_snapshot_today_flags():
     s = indicator_snapshot(f, masks, spec, state)
     assert s["near_lo"] and s["near_lo_edge"] and not s["near_lo_prev"]
     assert not np.isfinite(s["lo9_ewma"]) and not s["near_lo_ewma"] and not s["near_lo_ewma_edge"]
+    assert not np.isfinite(s["pct9_causal"]) and not np.isfinite(s["pct9_ewma"])
     assert s["aux_buy"] and s["ae_buy"] and s["b1"] and s["disc_ok"]
     assert s["buy_signal"] and not s["fast"]
     assert not s["near_hi"] and not s["aux_sell"]
@@ -310,6 +311,24 @@ def test_indicator_snapshot_ewma_lower_matches_envelope():
     assert s["near_lo_ewma"] is near
     assert s["near_lo_ewma_edge"] is (near and not near_prev)
     assert s["buy_signal"] is False
+    from etf_daily.plots.plot_regime_transition_example import (
+        causal_path_residual_signed_percentile,
+        ewma_path_residual_signed_percentile,
+    )
+
+    causal = causal_path_residual_signed_percentile(
+        f["fig9_path"], f["px"], min_bars=int(DEFAULT_MIN_BARS),
+    )
+    ewma = ewma_path_residual_signed_percentile(
+        f["fig9_path"], f["px"], min_bars=int(DEFAULT_MIN_BARS),
+    )
+    assert np.isclose(s["pct9_causal"], float(causal.iloc[-1]))
+    assert np.isclose(s["pct9_ewma"], float(ewma.iloc[-1]))
+    assert s["pct9_causal"] < 0
+    from etf_daily.scripts.scan_rules7_checklist import _signed_p
+
+    assert _signed_p("pct9_causal")(s).startswith("-P")
+    assert _signed_p("pct9_ewma")(s).startswith(("+P", "-P", "P"))
 
 
 def test_md_table_missing_column_does_not_raise():
@@ -331,14 +350,14 @@ def test_flat_buy_section_lists_holdings_with_a_price(tmp_path):
         {
             "代码": "SH513080", "名称": "法国ETF华安", "今日状态": "持仓", "今日动作": "持有",
             "类型": "慢趋势", "买规则": "aux_edge 或 B1", "T收盘": "1.6550",
-            "图9下轨": "1.6377", "距图9下轨": "1.1%",
+            "图9下轨": "1.6377", "距图9下轨": "1.1%", "因果分位": "-P72.3",
             "快形态(≥20%)": "", "买入信号": "", "图7或图8折价≤-8%": "是",
             "辅助买像": "是", "图9贴下轨(≤下轨×1.01)": "",
         },
         {
             "代码": "SH510300", "名称": "沪深300ETF华泰柏瑞", "今日状态": "空仓", "今日动作": "观望",
             "类型": "长期下跌或周期", "买规则": "aux_edge 或 B1", "T收盘": "4.3850",
-            "图9下轨": "4.1171", "距图9下轨": "6.5%",
+            "图9下轨": "4.1171", "距图9下轨": "6.5%", "因果分位": "+P18.0",
             "快形态(≥20%)": "", "买入信号": "", "图7或图8折价≤-8%": "",
             "辅助买像": "是", "图9贴下轨(≤下轨×1.01)": "",
         },
@@ -348,9 +367,11 @@ def test_flat_buy_section_lists_holdings_with_a_price(tmp_path):
     assert "SH510300" in text
     assert "1.6541" in text
     assert "持仓和空仓都填" in text
-    assert "| 代码 | 名称 | 类型 | 今日状态 | 买点价 | 买点状态 | T收盘 | 图9下轨 | 距图9下轨 |" in text
+    assert "| 代码 | 名称 | 类型 | 今日状态 | 买点价 | 买点状态 | T收盘 | 图9下轨 | 距图9下轨 | 因果分位 |" in text
     assert "| SH513080 | 法国ETF华安 | 慢趋势 | 持仓 |" in text
     assert "| SH510300 | 沪深300ETF华泰柏瑞 | 长期下跌或周期 | 空仓 |" in text
+    assert "-P72.3" in text
+    assert "+P18.0" in text
     assert "## 空仓买点价（图9 因果P95下轨）" in text
     assert "## 空仓买点价（图9 EWMA下轨）" in text
 
@@ -361,28 +382,30 @@ def test_flat_buy_section_ewma_sorts_apart_from_p95(tmp_path):
         annotate_flat_buy_quotes,
     )
 
-    def _row(code, name, lo, lo_ewma, dist, dist_ewma):
+    def _row(code, name, lo, lo_ewma, dist, dist_ewma, causal, ewma_pct):
         return {
             "代码": code, "名称": name, "今日状态": "空仓", "今日动作": "观望",
             "类型": "慢趋势", "买规则": "aux_edge", "T收盘": "10.0000",
-            "图9下轨": lo, "距图9下轨": dist,
-            "图9 EWMA下轨": lo_ewma, "距图9 EWMA下轨": dist_ewma,
+            "图9下轨": lo, "距图9下轨": dist, "因果分位": causal,
+            "图9 EWMA下轨": lo_ewma, "距图9 EWMA下轨": dist_ewma, "EWMA分位": ewma_pct,
             "快形态(≥20%)": "", "买入信号": "", "图7或图8折价≤-8%": "",
             "辅助买像": "是", "图9贴下轨(≤下轨×1.01)": "",
             "图9近EWMA下轨(≤下轨×1.01)": "", "近EWMA下轨上跳沿": "",
         }
 
     frame = annotate_flat_buy_quotes(pd.DataFrame([
-        _row("SH510300", "沪深300", "9.0000", "9.9000", "11.1%", "1.0%"),
-        _row("SH510500", "中证500", "9.8000", "8.0000", "2.0%", "25.0%"),
-        _row("SH511880", "银华日利", "9.5000", "", "5.3%", ""),
+        _row("SH510300", "沪深300", "9.0000", "9.9000", "11.1%", "1.0%", "-P40.0", "-P12.5"),
+        _row("SH510500", "中证500", "9.8000", "8.0000", "2.0%", "25.0%", "+P8.0", "+P90.1"),
+        _row("SH511880", "银华日利", "9.5000", "", "5.3%", "", "P0.0", "—"),
     ]))
     text = "\n".join(_format_flat_buy_section(frame, tmp_path))
     assert "## 空仓买点价（图9 EWMA下轨）" in text
-    assert "| 代码 | 名称 | 类型 | 今日状态 | EWMA买点价 | EWMA买点状态 | T收盘 | 图9 EWMA下轨 | 距图9 EWMA下轨 |" in text
+    assert "| 代码 | 名称 | 类型 | 今日状态 | EWMA买点价 | EWMA买点状态 | T收盘 | 图9 EWMA下轨 | 距图9 EWMA下轨 | EWMA分位 |" in text
     p95, ewma = text.split("## 空仓买点价（图9 EWMA下轨）", 1)
     assert p95.index("SH510500") < p95.index("SH511880") < p95.index("SH510300")
+    assert "-P40.0" in p95 and "+P8.0" in p95 and "P0.0" in p95
     assert ewma.index("SH510300") < ewma.index("SH510500") < ewma.index("SH511880")
+    assert "-P12.5" in ewma and "+P90.1" in ewma
     assert "9.9990" in ewma
     assert "8.0800" in ewma
     assert "无下轨" in ewma

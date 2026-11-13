@@ -91,15 +91,23 @@ def _b(key: str) -> Callable[[dict], str]:
     return lambda s: _yn(s[key])
 
 
+def _signed_p(key: str) -> Callable[[dict], str]:
+    from etf_daily.plots.plot_regime_transition_example import _fmt_signed_path_percentile
+
+    return lambda s: _fmt_signed_path_percentile(s.get(key))
+
+
 # (column, formatter over the snapshot) in CSV order, grouped by rule.
 SNAP_COLS: list[tuple[str, Callable[[dict], str]]] = [
     # buy: aux_edge
     ("图9下轨", _x("lo9")), ("距图9下轨", _p("dist_lo9")),
     ("图9贴下轨(≤下轨×1.01)", _b("near_lo")), ("昨日贴下轨", _b("near_lo_prev")),
     ("近下轨上跳沿", _b("near_lo_edge")),
+    ("因果分位", _signed_p("pct9_causal")),
     ("图9 EWMA下轨", _x("lo9_ewma")), ("距图9 EWMA下轨", _p("dist_lo9_ewma")),
     ("图9近EWMA下轨(≤下轨×1.01)", _b("near_lo_ewma")),
     ("近EWMA下轨上跳沿", _b("near_lo_ewma_edge")),
+    ("EWMA分位", _signed_p("pct9_ewma")),
     ("MA5", _x("ma5")), ("MA20", _x("ma20")),
     ("收盘<MA20", _b("below_ma20")), ("MA5<MA20", _b("ma5_below")),
     ("gap5", _p("gap5", 2)), ("gap5≤0", _b("gap5_le0")),
@@ -596,18 +604,19 @@ def _format_flat_buy_rail(flat: pd.DataFrame, listing: Path, *, rail: str) -> li
     if rail == "p95":
         title = "## 空仓买点价（图9 因果P95下轨）"
         price_col, status_col = "买点价", "买点状态"
-        rail_col, dist_col = "图9下轨", "距图9下轨"
+        rail_col, dist_col, pct_col = "图9下轨", "距图9下轨", "因果分位"
         n_buy = int(flat["今日动作"].astype(str).eq("买").sum()) if "今日动作" in flat.columns else 0
         intro = [
             f"今天买入信号 **{n_buy}** 只。买入信号为 0 则今天不买。",
             "买点价 = 图9下轨 × 1.01，持仓和空仓都填。持仓行的这个价格不产生新的买单。",
             "不是盘中委托。成交仍是信号出现之后的下一根收盘，且只在当时空仓时成交。",
             "已在带内的下一根收盘若仍在带内，不是新的 aux_edge。",
+            "因果分位是图9悬停上的相对路径因果分位，只作对照。",
         ]
     elif rail == "ewma":
         title = "## 空仓买点价（图9 EWMA下轨）"
         price_col, status_col = "EWMA买点价", "EWMA买点状态"
-        rail_col, dist_col = "图9 EWMA下轨", "距图9 EWMA下轨"
+        rail_col, dist_col, pct_col = "图9 EWMA下轨", "距图9 EWMA下轨", "EWMA分位"
         n_obs = (
             int(flat[status_col].astype(str).eq("今天已是买点").sum())
             if status_col in flat.columns else 0
@@ -619,6 +628,7 @@ def _format_flat_buy_rail(flat: pd.DataFrame, listing: Path, *, rail: str) -> li
             "λ=0.94，带宽取历史 |残差|/σ 的 95 分位乘当天 σ。",
             "持仓和空仓都填。持仓行的这个价格不产生新的买单。只作观察，不改今日动作、买入信号和成交。",
             "不是盘中委托。下轨还没预热出来的标的排在表尾，状态是“无下轨”。",
+            "EWMA分位是图9悬停上的相对路径ewma分位，只作对照。",
         ]
     else:
         raise ValueError(f"unknown rail {rail!r}")
@@ -638,7 +648,9 @@ def _format_flat_buy_rail(flat: pd.DataFrame, listing: Path, *, rail: str) -> li
         links.append(f"[{r['代码']}]({html_name})" if html_name else str(r["代码"]))
     show = show.copy()
     show["代码"] = links
-    lines += _md_table(show, ["代码", "名称", "类型", "今日状态", price_col, status_col, "T收盘", rail_col, dist_col])
+    lines += _md_table(
+        show, ["代码", "名称", "类型", "今日状态", price_col, status_col, "T收盘", rail_col, dist_col, pct_col],
+    )
     return lines
 
 
